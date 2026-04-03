@@ -421,6 +421,22 @@ def fill_skipped_frames(all_inpainted_dir, total_frames, skip=2):
 
 
 def reassemble_video(inpainted_dir, input_video, output_path, fps, register_process=None):
+    nvenc_command = [
+        "ffmpeg", "-y",
+        "-framerate", str(fps),
+        "-i", str(Path(inpainted_dir) / "%06d.png"),
+        "-i", str(input_video),
+        "-map", "0:v", "-map", "1:a?",
+        "-c:v", "h264_nvenc", "-cq", "18", "-preset", "p4", "-pix_fmt", "yuv420p",
+        "-c:a", "copy",
+        str(output_path),
+    ]
+    try:
+        _run_managed_command(nvenc_command, register_process=register_process)
+        return
+    except subprocess.CalledProcessError:
+        pass
+
     _run_managed_command([
         "ffmpeg", "-y",
         "-framerate", str(fps),
