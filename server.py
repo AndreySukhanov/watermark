@@ -321,6 +321,7 @@ def _run_ai_pipeline(
     total_frames = get_total_frames(duration, fps)
     if total_frames <= 0:
         raise RuntimeError("Не удалось определить количество кадров")
+    actual_total_frames = 0
 
     try:
         _raise_if_cancelled(job_id)
@@ -342,7 +343,7 @@ def _run_ai_pipeline(
 
         processed = 0
         for batch_start in range(0, total_frames, BATCH_SIZE):
-            batch_count = min(BATCH_SIZE, total_frames - batch_start)
+            expected_batch_count = min(BATCH_SIZE, total_frames - batch_start)
             batch_num = batch_start // BATCH_SIZE + 1
 
             if frames_dir.exists():
@@ -353,19 +354,30 @@ def _run_ai_pipeline(
                 shutil.rmtree(inpainted_dir)
 
             _raise_if_cancelled(job_id)
-            emit_log(f"Батч {batch_num}: извлечение {batch_count} кадров...")
+            emit_log(f"Батч {batch_num}: извлечение до {expected_batch_count} кадров...")
             extract_frames_range(
                 input_path,
                 frames_dir,
                 batch_start,
-                batch_count,
+                expected_batch_count,
                 fps,
                 register_process=lambda proc: _register_runtime_process(job_id, proc),
             )
+            batch_frames = sorted(frames_dir.glob("*.png"))
+            actual_batch_count = len(batch_frames)
+            if actual_batch_count == 0:
+                emit_log(f"  Батч {batch_num}: ffmpeg не вернул кадров, остановка на {processed} кадрах")
+                break
+            actual_total_frames = max(actual_total_frames, batch_start + actual_batch_count)
+            if actual_batch_count != expected_batch_count:
+                emit_log(
+                    f"  Батч {batch_num}: извлечено {actual_batch_count} вместо "
+                    f"ожидаемых {expected_batch_count}"
+                )
 
             _raise_if_cancelled(job_id)
             kept = thin_frames(frames_dir, skip=FRAME_SKIP, kept_dir=kept_dir)
-            emit_log(f"  Прореживание: {batch_count} → {kept} кадров")
+            emit_log(f"  Прореживание: {actual_batch_count} → {kept} кадров")
 
             _raise_if_cancelled(job_id)
             emit_log(f"Батч {batch_num}: IOPaint x4 ({device})...")
@@ -389,16 +401,22 @@ def _run_ai_pipeline(
                 all_inpainted,
                 mask_path,
             )
-            if written != batch_count:
+            if written != actual_batch_count:
                 raise RuntimeError(
                     f"Не удалось собрать батч {batch_num}: "
-                    f"ожидалось {batch_count} кадров, получено {written}"
+                    f"ожидалось {actual_batch_count} кадров, получено {written}"
                 )
 
-            processed += batch_count
+            processed += actual_batch_count
             emit_progress(10 + int(processed / max(total_frames, 1) * 75))
             done_so_far = len(list(all_inpainted.glob("*.png")))
-            emit_log(f"  Батч {batch_num} собран ({done_so_far}/{total_frames} кадров)")
+            emit_log(
+                f"  Батч {batch_num} собран ({done_so_far}/"
+                f"{actual_total_frames or total_frames} кадров)"
+            )
+
+        if actual_total_frames <= 0:
+            raise RuntimeError("Не удалось извлечь кадры из видео")
 
         emit_log("Сборка видео...")
         emit_progress(92)
