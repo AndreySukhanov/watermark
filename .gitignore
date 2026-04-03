@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+dist/
+build/
+*.spec
+*.egg-info/
+.idea/
+.vscode/
+temp_web/
+.claude/
+*.log
+
+# Local test media and debug artifacts
+Араб.mp4
+watermark_update.zip
+screenshot_app.png
+shot_*.png
+debug_*.png
+debug_*.jpg
+original_frame.jpg
+output_frame*.jpg
+result_frame.jpg

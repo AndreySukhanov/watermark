@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Watermark Remover</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app">
+
+    <header class="app-header">
+      <span class="app-title">Darkroom</span>
+      <span class="header-spacer"></span>
+      <span class="frame-counter" id="frame-counter">▸ WATERMARK REMOVER</span>
+      <span class="header-spacer"></span>
+      <span class="badge" id="status-badge">Готов</span>
+    </header>
+
+    <main class="app-body">
+
+      <!-- ── Left: preview ── -->
+      <section class="preview-panel">
+        <div class="canvas-wrap" id="canvas-wrap">
+          <canvas id="canvas" style="display:none"></canvas>
+          <div class="canvas-empty" id="canvas-empty">— откройте видеофайл —</div>
+        </div>
+
+        <div class="region-panel">
+          <div class="region-tools">
+            <button class="btn btn-sm btn-ghost" id="btn-mask-preview" onclick="toggleMaskPreview()">
+              Показать маску
+            </button>
+            <div class="mask-meta" id="mask-meta">Нет регионов</div>
+          </div>
+          <div id="regions-list" class="regions-list">
+            <div class="regions-empty">Нет регионов — нарисуйте прямоугольники на превью</div>
+          </div>
+          <div class="coords-row">
+            <div class="coord-field"><label>X</label><input type="number" id="inp-x" value="0" min="0"></div>
+            <div class="coord-field"><label>Y</label><input type="number" id="inp-y" value="0" min="0"></div>
+            <div class="coord-field"><label>W</label><input type="number" id="inp-w" value="0" min="0"></div>
+            <div class="coord-field"><label>H</label><input type="number" id="inp-h" value="0" min="0"></div>
+            <button class="btn btn-sm" onclick="applyCoords()">Применить</button>
+            <button class="btn btn-sm btn-ghost" onclick="resetSelection()">Очистить все</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Right: controls ── -->
+      <aside class="controls-panel">
+
+        <!-- File input -->
+        <div class="card">
+          <div class="card-title">Видеофайл</div>
+          <div class="tabs">
+            <button class="tab active" id="tab-path" onclick="switchTab('path')">Путь к файлу</button>
+            <button class="tab" id="tab-upload" onclick="switchTab('upload')">Загрузить</button>
+          </div>
+
+          <div id="mode-path">
+            <div class="row gap-6">
+              <input type="text" id="local-path" class="flex-1"
+                     placeholder="C:\Users\...\video.mp4"
+                     onkeydown="if(event.key==='Enter') loadFromPath()">
+              <button class="btn" onclick="loadFromPath()">Открыть</button>
+            </div>
+          </div>
+
+          <div id="mode-upload" style="display:none">
+            <div class="dropzone" id="dropzone"
+                 ondragover="event.preventDefault()" ondrop="onDrop(event)"
+                 onclick="document.getElementById('file-input').click()">
+              <input type="file" id="file-input" accept="video/*" multiple
+                     style="display:none" onchange="onFileSelected(this.files)">
+              <div class="dropzone-text">Перетащите видео сюда или кликните для выбора</div>
+            </div>
+            <div id="pending-files-list" style="margin-top: 10px; font-size: 13px; color: #ccc;"></div>
+          </div>
+
+          <div id="file-meta" style="display:none" class="file-meta-row">
+            <span id="metadata" class="meta-text">—</span>
+            <div class="row gap-6">
+              <label class="label-inline">Кадр на:</label>
+              <input type="number" id="preview-time" value="1.0" step="1" min="0" style="width:60px">
+              <span class="label-inline">с</span>
+              <button class="btn btn-sm" onclick="loadFrame()">Обновить</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Mode toggle -->
+        <div class="card">
+          <div class="card-title">Метод удаления</div>
+          <div class="mode-row">
+            <button id="btn-mode-delogo" class="mode-btn active" onclick="setMode('delogo')">
+              ⚡ Быстрый
+            </button>
+            <button id="btn-mode-ai" class="mode-btn" onclick="setMode('ai')">
+              🤖 AI (качество)
+            </button>
+          </div>
+          <div id="ai-warning" style="display:none" class="warn-text">
+            ⚠ Медленно: ~1 сек/кадр на CPU. Для 3-минутного видео ≈ 5 мин.
+          </div>
+          <div id="device-row" style="display:none; margin-top:8px">
+            <div class="mode-row">
+              <button id="btn-cpu" class="mode-btn active" onclick="setDevice('cpu')">CPU</button>
+              <button id="btn-cuda" class="mode-btn" onclick="setDevice('cuda')">GPU (CUDA)</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="action-row">
+          <button class="btn btn-primary btn-lg" id="btn-start" onclick="startProcessing()">▶ Запустить</button>
+          <button class="btn btn-danger" id="btn-cancel" onclick="cancelProcessing()" disabled>✕ Отмена</button>
+          <a class="btn btn-success" id="btn-download" style="display:none" download>↓ Скачать</a>
+        </div>
+
+        <!-- Progress -->
+        <div class="progress-wrap" id="progress-wrap" style="display:none">
+          <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+          <span class="progress-label" id="progress-label">0%</span>
+        </div>
+
+        <!-- Status -->
+        <div class="card card-status" id="status-card" style="display:none">
+          <div class="status-lines" id="log"></div>
+        </div>
+
+        <!-- Batch queue -->
+        <div class="card">
+          <div class="card-title">Очередь</div>
+          <div id="queue-list" class="queue-list">
+            <div class="regions-empty">Очередь пуста</div>
+          </div>
+          <div style="margin-top:6px; display: flex; gap: 6px;">
+            <button class="btn btn-sm" id="btn-add-queue" onclick="addToQueue()">+ Добавить текущий в очередь</button>
+            <button class="btn btn-sm" id="btn-add-all-queue" style="display:none;" onclick="addAllToQueue()">+ Добавить ВСЕ</button>
+          </div>
+        </div>
+
+      </aside>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

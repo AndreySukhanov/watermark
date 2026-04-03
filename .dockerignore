@@ -1,0 +1,15 @@
+__pycache__
+*.pyc
+temp_web/
+*.mp4
+app.py
+main_window.py
+widgets/
+models/
+utils/
+*.bat
+debug_*.py
+test_*.py
+screenshot_*.py
+.claude/
+.git/
