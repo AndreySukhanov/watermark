@@ -43,5 +43,5 @@ nohup python3 -m uvicorn server:app --host 0.0.0.0 --port 8000 > server.log 2>&1
 echo [Успех] Сервер обновлен и работает в фоне на порту 8000!
 "@
 
-& ssh -p 22115 -i $sshKey -o StrictHostKeyChecking=no root@69.30.85.178 $remoteScript
+$remoteScript | & ssh -p 22115 -i $sshKey -o StrictHostKeyChecking=no root@69.30.85.178 "bash -s"
 exit $LASTEXITCODE
