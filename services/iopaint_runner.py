@@ -1,4 +1,5 @@
 import math
+import os
 import shutil
 from bisect import bisect_left
 from pathlib import Path
@@ -319,12 +320,13 @@ def compose_inpainted_frames(
         if feather_radius > 0 else mask_crop
     )
 
-    written = 0
-    for original_path in original_frames:
+    compose_workers = min(len(original_frames), max(1, min(8, (os.cpu_count() or 4))))
+
+    def _compose_one(original_path):
         frame_num = int(original_path.stem)
         source_num = frame_num if frame_num in inpainted_map else _nearest_number(inpainted_nums, frame_num)
         if source_num is None:
-            continue
+            return 0
 
         with Image.open(original_path) as original_image, Image.open(inpainted_map[source_num]) as source_image:
             original_img = original_image.convert("RGB")
@@ -333,10 +335,11 @@ def compose_inpainted_frames(
             source_crop = source_img.crop(mask_bbox)
             composed_crop = Image.composite(source_crop, original_crop, blend_mask)
             original_img.paste(composed_crop, mask_bbox)
-            original_img.save(output_dir / original_path.name, compress_level=1)
-        written += 1
+            original_img.save(output_dir / original_path.name, compress_level=0)
+        return 1
 
-    return written
+    with ThreadPoolExecutor(max_workers=compose_workers) as pool:
+        return sum(pool.map(_compose_one, original_frames))
 
 
 def fill_skipped_frames(all_inpainted_dir, total_frames, skip=2):
