@@ -25,7 +25,7 @@ from services.iopaint_runner import (
     generate_mask, extract_frames_range,
     get_total_frames, reassemble_video,
     run_iopaint_parallel, compose_inpainted_frames, thin_frames,
-    write_iopaint_config,
+    write_iopaint_config, get_worker_count,
 )
 
 BASE = Path(__file__).parent
@@ -326,13 +326,14 @@ def _run_ai_pipeline(
         raise RuntimeError("Не удалось определить количество кадров")
     actual_total_frames = 0
     pipeline_started_at = time.perf_counter()
+    worker_count = get_worker_count(device)
 
     try:
         _raise_if_cancelled(job_id)
         to_process = math.ceil(total_frames / FRAME_SKIP)
         emit_log(
             f"Кадров: {total_frames}. Skip={FRAME_SKIP} → обработка {to_process}. "
-            f"Параллельность: x4."
+            f"Параллельность: x{worker_count}."
         )
 
         mask_path = work_dir / "mask.png"
@@ -397,6 +398,7 @@ def _run_ai_pipeline(
                 mask_path,
                 inpainted_dir,
                 device=device,
+                workers=worker_count,
                 register_process=lambda proc: _register_runtime_process(job_id, proc),
                 is_cancelled=lambda: _ensure_runtime(job_id).cancel_requested,
                 config_path=iopaint_config_path,
