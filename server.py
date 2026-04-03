@@ -391,7 +391,7 @@ def _run_ai_pipeline(
             emit_log(f"  Thin: {time.perf_counter() - thin_started_at:.1f}s")
 
             _raise_if_cancelled(job_id)
-            emit_log(f"Батч {batch_num}: IOPaint x4 ({device})...")
+            emit_log(f"Батч {batch_num}: IOPaint x{worker_count} ({device})...")
             iopaint_started_at = time.perf_counter()
             success, err = run_iopaint_parallel(
                 kept_dir,
