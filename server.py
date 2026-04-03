@@ -1,5 +1,6 @@
 import asyncio
 import concurrent.futures
+import json
 import math
 import os
 import re
@@ -24,6 +25,7 @@ from services.iopaint_runner import (
     generate_mask, extract_frames_range,
     get_total_frames, reassemble_video,
     run_iopaint_parallel, compose_inpainted_frames, thin_frames,
+    write_iopaint_config,
 )
 
 BASE = Path(__file__).parent
@@ -334,8 +336,10 @@ def _run_ai_pipeline(
         )
 
         mask_path = work_dir / "mask.png"
+        iopaint_config_path = write_iopaint_config(work_dir / "iopaint_config.json")
         generate_mask(width, height, params.get("regions", []), mask_path)
         emit_progress(5)
+        emit_log(f"IOPaint config: Resize {json.loads(iopaint_config_path.read_text(encoding='utf-8'))['hd_strategy_resize_limit']}")
 
         all_inpainted = work_dir / "all_inpainted"
         all_inpainted.mkdir(parents=True, exist_ok=True)
@@ -395,6 +399,7 @@ def _run_ai_pipeline(
                 device=device,
                 register_process=lambda proc: _register_runtime_process(job_id, proc),
                 is_cancelled=lambda: _ensure_runtime(job_id).cancel_requested,
+                config_path=iopaint_config_path,
             )
             _raise_if_cancelled(job_id)
             if not success:
