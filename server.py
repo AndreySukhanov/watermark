@@ -232,6 +232,7 @@ async def _run_job(job: QueueJob, out_path: Path):
 
     def _log(line: str):
         job.log.append(line)
+        print(f"[job {job.job_id}] {line}", flush=True)
 
     loop = asyncio.get_event_loop()
 
@@ -322,6 +323,7 @@ def _run_ai_pipeline(
     if total_frames <= 0:
         raise RuntimeError("Не удалось определить количество кадров")
     actual_total_frames = 0
+    pipeline_started_at = time.perf_counter()
 
     try:
         _raise_if_cancelled(job_id)
@@ -355,6 +357,7 @@ def _run_ai_pipeline(
 
             _raise_if_cancelled(job_id)
             emit_log(f"Батч {batch_num}: извлечение до {expected_batch_count} кадров...")
+            extract_started_at = time.perf_counter()
             extract_frames_range(
                 input_path,
                 frames_dir,
@@ -363,6 +366,7 @@ def _run_ai_pipeline(
                 fps,
                 register_process=lambda proc: _register_runtime_process(job_id, proc),
             )
+            emit_log(f"  Extract: {time.perf_counter() - extract_started_at:.1f}s")
             batch_frames = sorted(frames_dir.glob("*.png"))
             actual_batch_count = len(batch_frames)
             if actual_batch_count == 0:
@@ -376,11 +380,14 @@ def _run_ai_pipeline(
                 )
 
             _raise_if_cancelled(job_id)
+            thin_started_at = time.perf_counter()
             kept = thin_frames(frames_dir, skip=FRAME_SKIP, kept_dir=kept_dir)
             emit_log(f"  Прореживание: {actual_batch_count} → {kept} кадров")
+            emit_log(f"  Thin: {time.perf_counter() - thin_started_at:.1f}s")
 
             _raise_if_cancelled(job_id)
             emit_log(f"Батч {batch_num}: IOPaint x4 ({device})...")
+            iopaint_started_at = time.perf_counter()
             success, err = run_iopaint_parallel(
                 kept_dir,
                 mask_path,
@@ -392,15 +399,18 @@ def _run_ai_pipeline(
             _raise_if_cancelled(job_id)
             if not success:
                 raise RuntimeError(err or "IOPaint завершился с ошибкой")
+            emit_log(f"  IOPaint: {time.perf_counter() - iopaint_started_at:.1f}s")
 
             _raise_if_cancelled(job_id)
             emit_log(f"Батч {batch_num}: композиция финальных кадров...")
+            compose_started_at = time.perf_counter()
             written = compose_inpainted_frames(
                 frames_dir,
                 inpainted_dir,
                 all_inpainted,
                 mask_path,
             )
+            emit_log(f"  Compose: {time.perf_counter() - compose_started_at:.1f}s")
             if written != actual_batch_count:
                 raise RuntimeError(
                     f"Не удалось собрать батч {batch_num}: "
@@ -421,6 +431,7 @@ def _run_ai_pipeline(
         emit_log("Сборка видео...")
         emit_progress(92)
         _raise_if_cancelled(job_id)
+        reassemble_started_at = time.perf_counter()
         reassemble_video(
             all_inpainted,
             input_path,
@@ -428,6 +439,8 @@ def _run_ai_pipeline(
             fps,
             register_process=lambda proc: _register_runtime_process(job_id, proc),
         )
+        emit_log(f"  Reassemble: {time.perf_counter() - reassemble_started_at:.1f}s")
+        emit_log(f"Готово за {time.perf_counter() - pipeline_started_at:.1f}s")
     except subprocess.CalledProcessError as e:
         _raise_if_cancelled(job_id)
         details = (e.stderr or e.output or "").strip()
