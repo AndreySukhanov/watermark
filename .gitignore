@@ -12,6 +12,7 @@ build/
 temp_web/
 .claude/
 *.log
+output/
 
 # Local test media and debug artifacts
 Араб.mp4

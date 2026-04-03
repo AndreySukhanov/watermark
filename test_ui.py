@@ -3,6 +3,7 @@ UI tests for multi-region + mode toggle changes.
 """
 import sys
 from playwright.sync_api import sync_playwright
+from test_helpers import BASE_URL, open_video_in_ui, wait_for_preview
 
 ERRORS = []
 PASSED = []
@@ -15,16 +16,20 @@ def check(name, cond, detail=""):
         ERRORS.append(name)
         print(f"  FAIL  {name}" + (f" — {detail}" if detail else ""))
 
+
+def normalized_text(locator):
+    return (locator.inner_text() or "").strip().upper()
+
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
     page = browser.new_page()
-    page.goto("http://127.0.0.1:8000")
+    page.goto(BASE_URL)
     page.wait_for_load_state("networkidle")
 
     print("\n=== 1. Page structure ===")
     check("regions-list present", page.locator("#regions-list").count() == 1)
     check("regions-list shows empty hint",
-          "Нет регионов" in (page.locator("#regions-list").inner_text() or ""))
+          "НЕТ РЕГИОНОВ" in normalized_text(page.locator("#regions-list")))
     check("coord inputs present",
           all(page.locator(f"#inp-{k}").count() == 1 for k in ["x","y","w","h"]))
     check("Apply / Reset buttons present",
@@ -58,12 +63,11 @@ with sync_playwright() as p:
     check("ai warning hidden again", page.locator("#ai-warning").is_hidden())
 
     print("\n=== 3. Load video via path ===")
-    video_path = r"C:\Users\Пользователь\Desktop\watermark\Араб.mp4"
-    page.locator("#local-path").fill(video_path)
-    page.locator("button", has_text="Открыть").click()
-    page.wait_for_timeout(3000)
+    source_info = open_video_in_ui(page)
+    wait_for_preview(page)
+    page.wait_for_timeout(2000)
     meta = page.locator("#metadata").inner_text()
-    check("metadata populated", meta != "—", meta)
+    check("metadata populated", meta != "—", f"{source_info['source']}: {meta}")
     check("canvas visible", page.locator("#canvas").is_visible())
 
     print("\n=== 4. Draw regions via JS ===")
@@ -83,15 +87,15 @@ with sync_playwright() as p:
     check("active region syncs X to inputs",
           page.locator("#inp-x").input_value() == "300")
     check("mask meta shows region count",
-          "рег." in (page.locator("#mask-meta").inner_text() or ""))
+          "РЕГ." in normalized_text(page.locator("#mask-meta")))
 
     print("\n=== 4.1 Mask preview toggle ===")
     page.locator("#btn-mask-preview").click()
     page.wait_for_timeout(200)
     mask_btn_class = page.locator("#btn-mask-preview").get_attribute("class") or ""
-    mask_btn_text = page.locator("#btn-mask-preview").inner_text()
+    mask_btn_text = normalized_text(page.locator("#btn-mask-preview"))
     check("mask preview button becomes active", "is-active" in mask_btn_class)
-    check("mask preview button text switches to hide", "Скрыть маску" in mask_btn_text)
+    check("mask preview button text switches to hide", "СКРЫТЬ МАСКУ" in mask_btn_text)
 
     page.locator("#btn-mask-preview").click()
     page.wait_for_timeout(200)
@@ -126,7 +130,7 @@ with sync_playwright() as p:
     page.locator("button", has_text="Очистить все").click()
     page.wait_for_timeout(200)
     check("regions cleared", page.evaluate("() => regions.length") == 0)
-    check("empty hint shown again", "Нет регионов" in page.locator("#regions-list").inner_text())
+    check("empty hint shown again", "НЕТ РЕГИОНОВ" in normalized_text(page.locator("#regions-list")))
 
     print("\n=== 8. Start validation — no regions ===")
     page.locator("#btn-start").click()

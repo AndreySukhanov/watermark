@@ -23,7 +23,7 @@ from services.video_info import get_video_info
 from services.iopaint_runner import (
     generate_mask, extract_frames_range,
     get_total_frames, reassemble_video,
-    run_iopaint_parallel, fill_skipped_frames, thin_frames,
+    run_iopaint_parallel, compose_inpainted_frames, thin_frames,
 )
 
 BASE = Path(__file__).parent
@@ -330,12 +330,14 @@ def _run_ai_pipeline(
             f"Параллельность: x4."
         )
 
-        generate_mask(width, height, params.get("regions", []), work_dir / "mask.png")
+        mask_path = work_dir / "mask.png"
+        generate_mask(width, height, params.get("regions", []), mask_path)
         emit_progress(5)
 
         all_inpainted = work_dir / "all_inpainted"
         all_inpainted.mkdir(parents=True, exist_ok=True)
         frames_dir = work_dir / "frames"
+        kept_dir = work_dir / "kept"
         inpainted_dir = work_dir / "inpainted"
 
         processed = 0
@@ -345,6 +347,8 @@ def _run_ai_pipeline(
 
             if frames_dir.exists():
                 shutil.rmtree(frames_dir)
+            if kept_dir.exists():
+                shutil.rmtree(kept_dir)
             if inpainted_dir.exists():
                 shutil.rmtree(inpainted_dir)
 
@@ -360,14 +364,14 @@ def _run_ai_pipeline(
             )
 
             _raise_if_cancelled(job_id)
-            kept = thin_frames(frames_dir, skip=FRAME_SKIP)
+            kept = thin_frames(frames_dir, skip=FRAME_SKIP, kept_dir=kept_dir)
             emit_log(f"  Прореживание: {batch_count} → {kept} кадров")
 
             _raise_if_cancelled(job_id)
             emit_log(f"Батч {batch_num}: IOPaint x4 ({device})...")
             success, err = run_iopaint_parallel(
-                frames_dir,
-                work_dir / "mask.png",
+                kept_dir,
+                mask_path,
                 inpainted_dir,
                 device=device,
                 register_process=lambda proc: _register_runtime_process(job_id, proc),
@@ -377,22 +381,24 @@ def _run_ai_pipeline(
             if not success:
                 raise RuntimeError(err or "IOPaint завершился с ошибкой")
 
-            for f in sorted(inpainted_dir.glob("*.png")):
-                shutil.move(str(f), str(all_inpainted / f.name))
+            _raise_if_cancelled(job_id)
+            emit_log(f"Батч {batch_num}: композиция финальных кадров...")
+            written = compose_inpainted_frames(
+                frames_dir,
+                inpainted_dir,
+                all_inpainted,
+                mask_path,
+            )
+            if written != batch_count:
+                raise RuntimeError(
+                    f"Не удалось собрать батч {batch_num}: "
+                    f"ожидалось {batch_count} кадров, получено {written}"
+                )
 
             processed += batch_count
             emit_progress(10 + int(processed / max(total_frames, 1) * 75))
             done_so_far = len(list(all_inpainted.glob("*.png")))
-            emit_log(f"  Батч {batch_num} готов ({done_so_far} кадров)")
-
-        emit_log("Заполнение пропущенных кадров...")
-        emit_progress(87)
-        _raise_if_cancelled(job_id)
-        fill_skipped_frames(all_inpainted, total_frames, skip=FRAME_SKIP)
-        filled = len(list(all_inpainted.glob("*.png")))
-        emit_log(f"  Итого: {filled}/{total_frames} кадров")
-        if filled < total_frames:
-            emit_log(f"  ВНИМАНИЕ: не хватает {total_frames - filled} кадров!")
+            emit_log(f"  Батч {batch_num} собран ({done_so_far}/{total_frames} кадров)")
 
         emit_log("Сборка видео...")
         emit_progress(92)

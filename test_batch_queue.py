@@ -1,9 +1,10 @@
 import time
+import os
 import requests
 from pathlib import Path
 
-BASE_URL = "http://localhost:8000"
-TEST_FILE = r"C:\Users\Пользователь\Desktop\watermark\Араб.mp4"
+BASE_URL = os.environ.get("BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+TEST_FILE = os.environ.get("VIDEO_FILE", r"C:\Users\Пользователь\Desktop\watermark\Араб.mp4")
 
 def test_batch_queue():
     print(f"Starting test with file: {TEST_FILE}")
@@ -61,13 +62,10 @@ def test_batch_queue():
         if status == "done":
             download_url = my_job.get("download_url")
             print(f"Job completed successfully. Download URL: {download_url}")
-            # Verify file exists locally
-            filename = download_url.split("/")[-1]
-            output_file = Path("temp_web") / filename
-            if output_file.exists():
-                print(f"SUCCESS: Output file {output_file} exists and size is {output_file.stat().st_size} bytes.")
-            else:
-                print(f"ERROR: Output file {output_file} not found locally.")
+            if download_url:
+                dl = requests.get(f"{BASE_URL}{download_url}", timeout=60)
+                dl.raise_for_status()
+                print(f"SUCCESS: Download endpoint returned {len(dl.content)} bytes.")
             break
         elif status == "error":
             print(f"Job failed with error: {my_job.get('error')}")

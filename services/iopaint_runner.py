@@ -1,5 +1,6 @@
 import math
 import shutil
+from bisect import bisect_left
 from pathlib import Path
 import subprocess
 import threading
@@ -87,6 +88,19 @@ def extract_frames(input_path, frames_dir, register_process=None):
     return sorted(frames_dir.glob("*.png"))
 
 
+def _nearest_number(sorted_numbers, target):
+    if not sorted_numbers:
+        return None
+    idx = bisect_left(sorted_numbers, target)
+    if idx == 0:
+        return sorted_numbers[0]
+    if idx >= len(sorted_numbers):
+        return sorted_numbers[-1]
+    before = sorted_numbers[idx - 1]
+    after = sorted_numbers[idx]
+    return before if abs(target - before) <= abs(after - target) else after
+
+
 def extract_frames_range(input_path, frames_dir, start_frame, count, fps, register_process=None):
     """Extract a range of frames starting at start_frame (0-based).
 
@@ -107,23 +121,35 @@ def extract_frames_range(input_path, frames_dir, start_frame, count, fps, regist
     return sorted(frames_dir.glob("*.png"))
 
 
-def thin_frames(frames_dir, skip=2):
-    """Remove frames that aren't on skip boundaries, keeping correct numbering.
+def thin_frames(frames_dir, skip=2, kept_dir=None):
+    """Select frames on skip boundaries while preserving original numbering.
 
-    Keeps frames whose 1-based number within the dir satisfies (num - first) % skip == 0.
-    Returns count of remaining frames.
+    If kept_dir is provided, the selected frames are copied there and the original
+    directory remains intact. Otherwise, non-selected frames are deleted in-place.
+    Returns count of selected frames.
     """
     frames_dir = Path(frames_dir)
     all_frames = sorted(frames_dir.glob("*.png"))
     if not all_frames or skip <= 1:
+        if kept_dir:
+            kept_dir = Path(kept_dir)
+            kept_dir.mkdir(parents=True, exist_ok=True)
+            for f in all_frames:
+                shutil.copy2(str(f), str(kept_dir / f.name))
         return len(all_frames)
 
-    nums = sorted(int(f.stem) for f in all_frames)
-    first = nums[0]
     keep = set()
-    for i, num in enumerate(nums):
+    for i, num in enumerate(sorted(int(f.stem) for f in all_frames)):
         if i % skip == 0:
             keep.add(num)
+
+    if kept_dir:
+        kept_dir = Path(kept_dir)
+        kept_dir.mkdir(parents=True, exist_ok=True)
+        for f in all_frames:
+            if int(f.stem) in keep:
+                shutil.copy2(str(f), str(kept_dir / f.name))
+        return len(keep)
 
     for f in all_frames:
         if int(f.stem) not in keep:
@@ -255,6 +281,62 @@ def run_iopaint_parallel(frames_dir, mask_path, output_dir, device="cpu",
         shutil.rmtree(sd, ignore_errors=True)
 
     return True, None
+
+
+def compose_inpainted_frames(
+    original_frames_dir,
+    inpainted_dir,
+    output_dir,
+    mask_path,
+    feather_radius=6,
+):
+    """Compose final frames as original + masked region from nearest inpainted frame.
+
+    This avoids full-frame duplication artifacts when FRAME_SKIP > 1.
+    """
+    original_frames_dir = Path(original_frames_dir)
+    inpainted_dir = Path(inpainted_dir)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    original_frames = sorted(original_frames_dir.glob("*.png"))
+    inpainted_map = {int(f.stem): f for f in inpainted_dir.glob("*.png")}
+    inpainted_nums = sorted(inpainted_map)
+    if not original_frames or not inpainted_nums:
+        return 0
+
+    with Image.open(mask_path) as mask_image:
+        mask = mask_image.convert("L")
+    mask_bbox = mask.getbbox()
+    if not mask_bbox:
+        for original_path in original_frames:
+            shutil.copy2(str(original_path), str(output_dir / original_path.name))
+        return len(original_frames)
+
+    mask_crop = mask.crop(mask_bbox)
+    blend_mask = (
+        mask_crop.filter(ImageFilter.GaussianBlur(feather_radius))
+        if feather_radius > 0 else mask_crop
+    )
+
+    written = 0
+    for original_path in original_frames:
+        frame_num = int(original_path.stem)
+        source_num = frame_num if frame_num in inpainted_map else _nearest_number(inpainted_nums, frame_num)
+        if source_num is None:
+            continue
+
+        with Image.open(original_path) as original_image, Image.open(inpainted_map[source_num]) as source_image:
+            original_img = original_image.convert("RGB")
+            source_img = source_image.convert("RGB")
+            original_crop = original_img.crop(mask_bbox)
+            source_crop = source_img.crop(mask_bbox)
+            composed_crop = Image.composite(source_crop, original_crop, blend_mask)
+            original_img.paste(composed_crop, mask_bbox)
+            original_img.save(output_dir / original_path.name, compress_level=1)
+        written += 1
+
+    return written
 
 
 def fill_skipped_frames(all_inpainted_dir, total_frames, skip=2):
