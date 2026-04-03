@@ -426,7 +426,7 @@ def _run_ai_pipeline(
 
             processed += actual_batch_count
             emit_progress(10 + int(processed / max(total_frames, 1) * 75))
-            done_so_far = len(list(all_inpainted.glob("*.png")))
+            done_so_far = sum(1 for path in all_inpainted.iterdir() if path.is_file())
             emit_log(
                 f"  Батч {batch_num} собран ({done_so_far}/"
                 f"{actual_total_frames or total_frames} кадров)"

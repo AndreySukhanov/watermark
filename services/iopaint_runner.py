@@ -14,6 +14,8 @@ MASK_PADDING = 8
 MASK_DILATE = 4
 IOPAINT_HD_STRATEGY = "Resize"
 IOPAINT_RESIZE_LIMIT = 1024
+FINAL_FRAME_SUFFIX = ".jpg"
+FINAL_FRAME_QUALITY = 95
 
 # Number of parallel IOPaint workers (LAMA uses ~1.5 GB VRAM each)
 def get_worker_count(device="cpu"):
@@ -341,6 +343,7 @@ def compose_inpainted_frames(
     output_dir,
     mask_path,
     feather_radius=6,
+    output_suffix=FINAL_FRAME_SUFFIX,
 ):
     """Compose final frames as original + masked region from nearest inpainted frame.
 
@@ -362,7 +365,12 @@ def compose_inpainted_frames(
     mask_bbox = mask.getbbox()
     if not mask_bbox:
         for original_path in original_frames:
-            shutil.copy2(str(original_path), str(output_dir / original_path.name))
+            with Image.open(original_path) as original_image:
+                original_image.convert("RGB").save(
+                    output_dir / f"{original_path.stem}{output_suffix}",
+                    quality=FINAL_FRAME_QUALITY,
+                    subsampling=0,
+                )
         return len(original_frames)
 
     mask_crop = mask.crop(mask_bbox)
@@ -374,6 +382,7 @@ def compose_inpainted_frames(
     compose_workers = min(len(original_frames), max(1, min(8, (os.cpu_count() or 4))))
 
     def _compose_one(original_path):
+        output_path = output_dir / f"{original_path.stem}{output_suffix}"
         frame_num = int(original_path.stem)
         source_num = frame_num if frame_num in inpainted_map else _nearest_number(inpainted_nums, frame_num)
         if source_num is None:
@@ -386,7 +395,11 @@ def compose_inpainted_frames(
             source_crop = source_img.crop(mask_bbox)
             composed_crop = Image.composite(source_crop, original_crop, blend_mask)
             original_img.paste(composed_crop, mask_bbox)
-            original_img.save(output_dir / original_path.name, compress_level=0)
+            original_img.save(
+                output_path,
+                quality=FINAL_FRAME_QUALITY,
+                subsampling=0,
+            )
         return 1
 
     with ThreadPoolExecutor(max_workers=compose_workers) as pool:
@@ -421,10 +434,16 @@ def fill_skipped_frames(all_inpainted_dir, total_frames, skip=2):
 
 
 def reassemble_video(inpainted_dir, input_video, output_path, fps, register_process=None):
+    inpainted_dir = Path(inpainted_dir)
+    first_frame = next((f for f in sorted(inpainted_dir.iterdir()) if f.is_file()), None)
+    if first_frame is None:
+        raise RuntimeError("Не найдено кадров для сборки видео")
+    frame_pattern = f"%06d{first_frame.suffix}"
+
     nvenc_command = [
         "ffmpeg", "-y",
         "-framerate", str(fps),
-        "-i", str(Path(inpainted_dir) / "%06d.png"),
+        "-i", str(inpainted_dir / frame_pattern),
         "-i", str(input_video),
         "-map", "0:v", "-map", "1:a?",
         "-c:v", "h264_nvenc", "-cq", "18", "-preset", "p4", "-pix_fmt", "yuv420p",
@@ -440,7 +459,7 @@ def reassemble_video(inpainted_dir, input_video, output_path, fps, register_proc
     _run_managed_command([
         "ffmpeg", "-y",
         "-framerate", str(fps),
-        "-i", str(Path(inpainted_dir) / "%06d.png"),
+        "-i", str(inpainted_dir / frame_pattern),
         "-i", str(input_video),
         "-map", "0:v", "-map", "1:a?",
         "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p",
