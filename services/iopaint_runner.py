@@ -17,8 +17,10 @@ IOPAINT_RESIZE_LIMIT = 1024
 
 # Number of parallel IOPaint workers (LAMA uses ~1.5 GB VRAM each)
 def get_worker_count(device="cpu"):
-    # RTX A5000 24GB: LAMA ~1.5GB each, 4 instances = 6GB — fits easily
-    return 4
+    if device == "cuda":
+        # Resize strategy lowered per-worker pressure enough to run six workers on A5000.
+        return 6
+    return 1
 
 
 def generate_mask(width, height, regions, out_path, padding=MASK_PADDING, dilate=MASK_DILATE):
@@ -147,12 +149,18 @@ def thin_frames(frames_dir, skip=2, kept_dir=None):
         if i % skip == 0:
             keep.add(num)
 
+    def _link_or_copy(src: Path, dst: Path):
+        try:
+            os.link(src, dst)
+        except OSError:
+            shutil.copy2(str(src), str(dst))
+
     if kept_dir:
         kept_dir = Path(kept_dir)
         kept_dir.mkdir(parents=True, exist_ok=True)
         for f in all_frames:
             if int(f.stem) in keep:
-                shutil.copy2(str(f), str(kept_dir / f.name))
+                _link_or_copy(f, kept_dir / f.name)
         return len(keep)
 
     for f in all_frames:
