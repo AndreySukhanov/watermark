@@ -18,8 +18,8 @@ IOPAINT_RESIZE_LIMIT = 1024
 # Number of parallel IOPaint workers (LAMA uses ~1.5 GB VRAM each)
 def get_worker_count(device="cpu"):
     if device == "cuda":
-        # Resize strategy lowered per-worker pressure enough to run six workers on A5000.
-        return 6
+        # Resize strategy lowered per-worker pressure enough to run eight workers on A5000.
+        return 8
     return 1
 
 
