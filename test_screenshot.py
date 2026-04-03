@@ -1,10 +1,11 @@
 from playwright.sync_api import sync_playwright
+from test_helpers import BASE_URL, save_shot
 
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True)
     page = browser.new_page(viewport={"width": 1400, "height": 900})
-    page.goto("https://l2ethv50lv9nql-8000.proxy.runpod.net/", timeout=30000)
+    page.goto(BASE_URL, timeout=30000)
     page.wait_for_load_state("networkidle")
-    page.screenshot(path="C:/Users/Пользователь/Desktop/watermark/screenshot_app.png", full_page=True)
-    print("Screenshot saved")
+    path = save_shot(page, "app_screenshot.png")
+    print(f"Screenshot saved: {path}")
     browser.close()
