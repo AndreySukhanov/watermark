@@ -1,3 +1,4 @@
+import json
 import math
 import os
 import shutil
@@ -11,6 +12,8 @@ from PIL import Image, ImageDraw, ImageFilter
 
 MASK_PADDING = 8
 MASK_DILATE = 4
+IOPAINT_HD_STRATEGY = "Resize"
+IOPAINT_RESIZE_LIMIT = 1024
 
 # Number of parallel IOPaint workers (LAMA uses ~1.5 GB VRAM each)
 def get_worker_count(device="cpu"):
@@ -159,23 +162,60 @@ def thin_frames(frames_dir, skip=2, kept_dir=None):
     return len(keep)
 
 
-def start_iopaint(frames_dir, mask_path, output_dir, device="cpu"):
+def write_iopaint_config(
+    config_path,
+    hd_strategy=IOPAINT_HD_STRATEGY,
+    resize_limit=IOPAINT_RESIZE_LIMIT,
+):
+    config_path = Path(config_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(
+        json.dumps(
+            {
+                "hd_strategy": hd_strategy,
+                "hd_strategy_resize_limit": resize_limit,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return config_path
+
+
+def start_iopaint(frames_dir, mask_path, output_dir, device="cpu", config_path=None):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    command = [
+        "iopaint", "run", "--model", "lama", "--device", device,
+        "--image", str(frames_dir), "--mask", str(mask_path),
+        "--output", str(output_dir),
+    ]
+    if config_path:
+        command.extend(["--config", str(config_path)])
     return subprocess.Popen(
-        ["iopaint", "run", "--model", "lama", "--device", device,
-         "--image", str(frames_dir), "--mask", str(mask_path),
-         "--output", str(output_dir)],
+        command,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace",
     )
 
 
-def run_iopaint_sync(frames_dir, mask_path, output_dir, device="cpu", register_process=None):
+def run_iopaint_sync(
+    frames_dir,
+    mask_path,
+    output_dir,
+    device="cpu",
+    register_process=None,
+    config_path=None,
+):
     """Run IOPaint synchronously, return (returncode, output_text)."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    proc = start_iopaint(frames_dir, mask_path, output_dir, device=device)
+    proc = start_iopaint(
+        frames_dir,
+        mask_path,
+        output_dir,
+        device=device,
+        config_path=config_path,
+    )
     if register_process:
         register_process(proc)
     stdout, _ = proc.communicate()
@@ -183,7 +223,8 @@ def run_iopaint_sync(frames_dir, mask_path, output_dir, device="cpu", register_p
 
 
 def run_iopaint_parallel(frames_dir, mask_path, output_dir, device="cpu",
-                         workers=None, register_process=None, is_cancelled=None):
+                         workers=None, register_process=None, is_cancelled=None,
+                         config_path=None):
     """Split frames into sub-batches, run IOPaint in parallel.
 
     Returns (success: bool, error_message: str | None).
@@ -210,6 +251,7 @@ def run_iopaint_parallel(frames_dir, mask_path, output_dir, device="cpu",
             output_dir,
             device,
             register_process=register_process,
+            config_path=config_path,
         )
         if rc != 0:
             return False, f"IOPaint error (code {rc}): {out[-500:]}"
@@ -256,6 +298,7 @@ def run_iopaint_parallel(frames_dir, mask_path, output_dir, device="cpu",
                 so,
                 device,
                 _register_subprocess,
+                config_path,
             ): (sd, so)
             for sd, so in zip(sub_dirs, sub_outs)
         }
