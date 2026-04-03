@@ -16,6 +16,7 @@ if (-not $ghToken) {
 $sshKey = Join-Path $env:USERPROFILE ".ssh\id_ed25519"
 $remoteScript = @"
 set -e
+GIT_AUTH_HEADER='Authorization: Bearer $ghToken'
 if ! command -v git >/dev/null 2>&1; then
   apt-get update -qq >/dev/null 2>&1
   apt-get install -y -qq git >/dev/null 2>&1
@@ -23,17 +24,17 @@ fi
 mkdir -p /workspace
 if [ ! -d /workspace/watermark/.git ]; then
   rm -rf /workspace/watermark
-  git -c http.extraHeader="Authorization: Bearer $ghToken" clone --branch main $repoUrl /workspace/watermark
+  git -c http.extraHeader="$GIT_AUTH_HEADER" clone --branch main $repoUrl /workspace/watermark
 else
   cd /workspace/watermark
   git remote set-url origin $repoUrl
-  git -c http.extraHeader="Authorization: Bearer $ghToken" fetch origin main
+  git -c http.extraHeader="$GIT_AUTH_HEADER" fetch origin main
   if git show-ref --verify --quiet refs/heads/main; then
     git checkout main
   else
     git checkout -b main origin/main
   fi
-  git -c http.extraHeader="Authorization: Bearer $ghToken" pull --ff-only origin main
+  git -c http.extraHeader="$GIT_AUTH_HEADER" pull --ff-only origin main
 fi
 cd /workspace/watermark
 pip install -q -r requirements_web.txt
