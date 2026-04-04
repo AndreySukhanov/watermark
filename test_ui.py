@@ -45,6 +45,10 @@ with sync_playwright() as p:
           "active" in (page.locator("#btn-mode-delogo").get_attribute("class") or ""))
     check("ai warning hidden by default",
           page.locator("#ai-warning").is_hidden())
+    check("engine row hidden by default",
+          page.locator("#engine-row").is_hidden())
+    check("quality card hidden by default",
+          page.locator("#quality-card").is_hidden())
 
     # Click AI mode
     page.locator("#btn-mode-ai").click()
@@ -53,14 +57,29 @@ with sync_playwright() as p:
           "active" in (page.locator("#btn-mode-ai").get_attribute("class") or ""))
     check("ai warning shown after click",
           page.locator("#ai-warning").is_visible())
+    check("engine row shown after click",
+          page.locator("#engine-row").is_visible())
+    check("engine list present",
+          page.locator("#engine-list .engine-btn").count() >= 1)
+    check("quality card shown after click",
+          page.locator("#quality-card").is_visible())
+    check("quality analyze buttons present",
+          page.locator("#btn-quality-analyze").count() == 1 and
+          page.locator("#btn-quality-detect").count() == 1)
     check("delogo btn loses active",
           "active" not in (page.locator("#btn-mode-delogo").get_attribute("class") or ""))
+
+    first_engine = page.locator("#engine-list .engine-btn").first
+    check("default engine selected",
+          "is-active" in (first_engine.get_attribute("class") or ""))
 
     # Switch back
     page.locator("#btn-mode-delogo").click()
     page.wait_for_timeout(200)
     check("delogo active again", "active" in (page.locator("#btn-mode-delogo").get_attribute("class") or ""))
     check("ai warning hidden again", page.locator("#ai-warning").is_hidden())
+    check("engine row hidden again", page.locator("#engine-row").is_hidden())
+    check("quality card hidden again", page.locator("#quality-card").is_hidden())
 
     print("\n=== 3. Load video via path ===")
     source_info = open_video_in_ui(page)

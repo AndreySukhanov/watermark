@@ -1,0 +1,111 @@
+import os
+from dataclasses import asdict, dataclass
+
+
+@dataclass(frozen=True)
+class AIEngineConfig:
+    key: str
+    label: str
+    family: str
+    description: str
+    estimate_multiplier: float
+    skip: int
+    refine_mask: bool
+    mask_padding: int
+    mask_dilate: int
+    feather_radius: int
+    blend_skipped: bool
+    worker_count_override: int = 0
+    hd_strategy: str = "Resize"
+    resize_limit: int = 1024
+    output_suffix: str = ".jpg"
+    output_quality: int = 99
+    propainter_width: int = 960
+    propainter_height: int = 540
+    propainter_subvideo_length: int = 30
+    propainter_neighbor_length: int = 10
+    propainter_ref_stride: int = 10
+    propainter_mask_dilation: int = 4
+    propainter_fp16: bool = True
+
+    def to_metadata(self) -> dict:
+        data = asdict(self)
+        return {
+            "key": data["key"],
+            "label": data["label"],
+            "family": data["family"],
+            "description": data["description"],
+            "estimate_multiplier": data["estimate_multiplier"],
+            "skip": data["skip"],
+            "refine_mask": data["refine_mask"],
+        }
+
+
+AI_ENGINES: dict[str, AIEngineConfig] = {
+    "lama_fast": AIEngineConfig(
+        key="lama_fast",
+        label="LaMa Fast",
+        family="lama",
+        description="Максимально быстрый режим для длинных роликов.",
+        estimate_multiplier=float(os.environ.get("ENGINE_LAMA_FAST_X", "4.9")),
+        skip=int(os.environ.get("ENGINE_LAMA_FAST_SKIP", os.environ.get("FRAME_SKIP", "4"))),
+        refine_mask=False,
+        mask_padding=int(os.environ.get("ENGINE_LAMA_FAST_MASK_PADDING", "8")),
+        mask_dilate=int(os.environ.get("ENGINE_LAMA_FAST_MASK_DILATE", "4")),
+        feather_radius=int(os.environ.get("ENGINE_LAMA_FAST_FEATHER", "2")),
+        blend_skipped=True,
+        worker_count_override=int(os.environ.get("ENGINE_LAMA_FAST_WORKERS", "8")),
+        resize_limit=int(os.environ.get("ENGINE_LAMA_FAST_RESIZE", "1024")),
+        output_quality=int(os.environ.get("ENGINE_LAMA_FAST_JPEG_QUALITY", "99")),
+    ),
+    "lama_quality": AIEngineConfig(
+        key="lama_quality",
+        label="LaMa Quality",
+        family="lama",
+        description="Более чистая очистка за счет refined mask и меньшего skip.",
+        estimate_multiplier=float(os.environ.get("ENGINE_LAMA_QUALITY_X", "8.5")),
+        skip=int(os.environ.get("ENGINE_LAMA_QUALITY_SKIP", "2")),
+        refine_mask=True,
+        mask_padding=int(os.environ.get("ENGINE_LAMA_QUALITY_MASK_PADDING", "16")),
+        mask_dilate=int(os.environ.get("ENGINE_LAMA_QUALITY_MASK_DILATE", "8")),
+        feather_radius=int(os.environ.get("ENGINE_LAMA_QUALITY_FEATHER", "4")),
+        blend_skipped=False,
+        worker_count_override=int(os.environ.get("ENGINE_LAMA_QUALITY_WORKERS", "4")),
+        resize_limit=int(os.environ.get("ENGINE_LAMA_QUALITY_RESIZE", "1536")),
+        output_quality=int(os.environ.get("ENGINE_LAMA_QUALITY_JPEG_QUALITY", "100")),
+    ),
+    "propainter_quality": AIEngineConfig(
+        key="propainter_quality",
+        label="ProPainter",
+        family="propainter",
+        description="Video-aware quality mode с лучшей temporal consistency.",
+        estimate_multiplier=float(os.environ.get("ENGINE_PROPAINTER_X", "19.0")),
+        skip=1,
+        refine_mask=True,
+        mask_padding=int(os.environ.get("ENGINE_PROPAINTER_MASK_PADDING", "12")),
+        mask_dilate=int(os.environ.get("ENGINE_PROPAINTER_MASK_DILATE", "6")),
+        feather_radius=int(os.environ.get("ENGINE_PROPAINTER_FEATHER", "3")),
+        blend_skipped=False,
+        worker_count_override=0,
+        resize_limit=int(os.environ.get("ENGINE_PROPAINTER_RESIZE", "960")),
+        propainter_width=int(os.environ.get("ENGINE_PROPAINTER_WIDTH", "960")),
+        propainter_height=int(os.environ.get("ENGINE_PROPAINTER_HEIGHT", "540")),
+        propainter_subvideo_length=int(os.environ.get("ENGINE_PROPAINTER_SUBVIDEO", "30")),
+        propainter_neighbor_length=int(os.environ.get("ENGINE_PROPAINTER_NEIGHBOR", "10")),
+        propainter_ref_stride=int(os.environ.get("ENGINE_PROPAINTER_REF_STRIDE", "10")),
+        propainter_mask_dilation=int(os.environ.get("ENGINE_PROPAINTER_MASK_DILATION", "4")),
+        propainter_fp16=os.environ.get("ENGINE_PROPAINTER_FP16", "1").lower() not in {"0", "false", "no"},
+    ),
+}
+
+DEFAULT_AI_ENGINE = "lama_fast"
+
+
+def get_engine_config(engine: str | None) -> AIEngineConfig:
+    if engine in AI_ENGINES:
+        return AI_ENGINES[engine]
+    return AI_ENGINES[DEFAULT_AI_ENGINE]
+
+
+def list_engine_metadata() -> list[dict]:
+    return [cfg.to_metadata() for cfg in AI_ENGINES.values()]

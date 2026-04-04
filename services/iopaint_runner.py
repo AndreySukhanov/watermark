@@ -9,10 +9,12 @@ import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 MASK_PADDING = int(os.environ.get("MASK_PADDING", "8"))
 MASK_DILATE = int(os.environ.get("MASK_DILATE", "4"))
+MASK_MIN_RATIO = float(os.environ.get("MASK_MIN_RATIO", "0.002"))
+MASK_MAX_RATIO = float(os.environ.get("MASK_MAX_RATIO", "0.18"))
 IOPAINT_HD_STRATEGY = os.environ.get("IOPAINT_HD_STRATEGY", "Resize")
 IOPAINT_RESIZE_LIMIT = int(os.environ.get("IOPAINT_RESIZE_LIMIT", "1024"))
 FINAL_FRAME_SUFFIX = os.environ.get("FINAL_FRAME_SUFFIX", ".jpg").lower()
@@ -35,23 +37,85 @@ def get_worker_count(device="cpu"):
     return 1
 
 
-def generate_mask(width, height, regions, out_path, padding=MASK_PADDING, dilate=MASK_DILATE):
+def _mask_pixel_ratio(mask: Image.Image) -> float:
+    hist = mask.histogram()
+    total = mask.size[0] * mask.size[1]
+    if total <= 0:
+        return 0.0
+    return hist[255] / float(total)
+
+
+def _build_band_mask(width: int, height: int) -> Image.Image:
+    band = Image.new("L", (width, height), 0)
+    left = max(0, int(width * 0.04))
+    right = min(width, int(width * 0.96))
+    top = max(0, int(height * 0.30))
+    bottom = min(height, int(height * 0.72))
+    ImageDraw.Draw(band).rectangle((left, top, right, bottom), fill=255)
+    return band.filter(ImageFilter.GaussianBlur(1)).point(lambda p: 255 if p >= 18 else 0)
+
+
+def _refine_region_mask(frame_crop: Image.Image) -> Image.Image:
+    gray = frame_crop.convert("L")
+    blur = gray.filter(ImageFilter.GaussianBlur(10))
+    detail = ImageChops.subtract(gray, blur)
+    bright = gray.point(lambda p: 255 if p >= 132 else 0)
+    detail = detail.point(lambda p: 255 if p >= 16 else 0)
+    candidate = ImageChops.multiply(bright, detail).point(lambda p: 255 if p >= 60 else 0)
+    candidate = candidate.filter(ImageFilter.MaxFilter(5))
+    candidate = candidate.filter(ImageFilter.GaussianBlur(1))
+    candidate = candidate.point(lambda p: 255 if p >= 22 else 0)
+
+    ratio = _mask_pixel_ratio(candidate)
+    if MASK_MIN_RATIO <= ratio <= MASK_MAX_RATIO:
+        return candidate
+    return _build_band_mask(*frame_crop.size)
+
+
+def generate_mask(
+    width,
+    height,
+    regions,
+    out_path,
+    padding=MASK_PADDING,
+    dilate=MASK_DILATE,
+    reference_frame_path=None,
+):
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     img = Image.new("L", (width, height), 0)
     draw = ImageDraw.Draw(img)
-    for r in regions:
-        x0 = max(0, int(r["x"]) - padding)
-        y0 = max(0, int(r["y"]) - padding)
-        x1 = min(width, int(r["x"]) + int(r["w"]) + padding)
-        y1 = min(height, int(r["y"]) + int(r["h"]) + padding)
-        if x1 > x0 and y1 > y0:
-            draw.rectangle([x0, y0, x1, y1], fill=255)
+
+    reference_frame = None
+    if reference_frame_path:
+        ref_path = Path(reference_frame_path)
+        if ref_path.exists():
+            reference_frame = Image.open(ref_path).convert("RGB")
+
+    try:
+        for r in regions:
+            x0 = max(0, int(r["x"]) - padding)
+            y0 = max(0, int(r["y"]) - padding)
+            x1 = min(width, int(r["x"]) + int(r["w"]) + padding)
+            y1 = min(height, int(r["y"]) + int(r["h"]) + padding)
+            if x1 <= x0 or y1 <= y0:
+                continue
+            if reference_frame is None:
+                draw.rectangle([x0, y0, x1, y1], fill=255)
+                continue
+            frame_crop = reference_frame.crop((x0, y0, x1, y1))
+            region_mask = _refine_region_mask(frame_crop)
+            img.paste(region_mask, (x0, y0))
+    finally:
+        if reference_frame is not None:
+            reference_frame.close()
+
     if dilate > 0:
         kernel = max(3, dilate * 2 + 1)
         if kernel % 2 == 0:
             kernel += 1
         img = img.filter(ImageFilter.MaxFilter(kernel))
+        img = img.point(lambda p: 255 if p >= 18 else 0)
     img.save(str(out_path))
 
 
@@ -94,6 +158,50 @@ def get_total_frames(duration: float, fps: float) -> int:
     if duration <= 0 or fps <= 0:
         return 0
     return int(math.ceil(duration * fps))
+
+
+def extract_reference_frame(input_path, out_path, time_sec=5.0, register_process=None):
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    _run_managed_command(
+        [
+            "ffmpeg",
+            "-y",
+            "-ss",
+            str(max(0.0, time_sec)),
+            "-i",
+            str(input_path),
+            "-frames:v",
+            "1",
+            str(out_path),
+        ],
+        register_process=register_process,
+    )
+    return out_path
+
+
+def build_mask_preview(reference_frame_path, mask_path, out_path):
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with Image.open(reference_frame_path) as frame_image, Image.open(mask_path) as mask_image:
+        frame = frame_image.convert("RGB")
+        mask = mask_image.convert("L")
+        overlay = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+        overlay.putalpha(mask.point(lambda p: 180 if p > 0 else 0))
+        preview = Image.alpha_composite(frame.convert("RGBA"), overlay)
+        preview.save(out_path)
+    return out_path
+
+
+def get_mask_stats(mask_path):
+    with Image.open(mask_path) as mask_image:
+        mask = mask_image.convert("L")
+        bbox = mask.getbbox()
+        coverage = _mask_pixel_ratio(mask)
+    return {
+        "coverage": round(coverage * 100, 3),
+        "bbox": bbox,
+    }
 
 
 def extract_frames(input_path, frames_dir, register_process=None):
@@ -358,6 +466,8 @@ def compose_inpainted_frames(
     mask_path,
     feather_radius=COMPOSE_FEATHER_RADIUS,
     output_suffix=FINAL_FRAME_SUFFIX,
+    output_quality=FINAL_FRAME_QUALITY,
+    blend_skipped=COMPOSE_BLEND_SKIPPED,
 ):
     """Compose final frames as original + masked region from nearest inpainted frame.
 
@@ -382,7 +492,7 @@ def compose_inpainted_frames(
             with Image.open(original_path) as original_image:
                 original_image.convert("RGB").save(
                     output_dir / f"{original_path.stem}{output_suffix}",
-                    quality=FINAL_FRAME_QUALITY,
+                    quality=output_quality,
                     subsampling=0,
                 )
         return len(original_frames)
@@ -409,7 +519,7 @@ def compose_inpainted_frames(
 
             if frame_num in inpainted_map:
                 source_crop = _load_source_crop(frame_num)
-            elif COMPOSE_BLEND_SKIPPED:
+            elif blend_skipped:
                 prev_num, next_num = _neighbor_numbers(inpainted_nums, frame_num)
                 if prev_num is None and next_num is None:
                     return 0
@@ -437,7 +547,7 @@ def compose_inpainted_frames(
             else:
                 original_img.save(
                     output_path,
-                    quality=FINAL_FRAME_QUALITY,
+                    quality=output_quality,
                     subsampling=0,
                 )
         return 1
