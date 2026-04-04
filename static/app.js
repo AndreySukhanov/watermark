@@ -14,6 +14,9 @@ const state = {
   downloadUrl: null,
   pendingFiles: [],       // Array of File objects selected by user
   pendingUploads: new Map(),
+  engine: 'lama_fast',
+  engines: [],
+  qualityAnalysis: null,
 };
 
 // ── Canvas ───────────────────────────────────────────────────────────────────
@@ -36,6 +39,35 @@ let showMaskPreview = false;
 const MASK_PADDING = 8;
 const MASK_DILATE = 4;
 const MASK_EXPAND = MASK_PADDING + MASK_DILATE;
+const FALLBACK_AI_ENGINES = [
+  {
+    key: 'lama_fast',
+    label: 'LaMa Fast',
+    family: 'lama',
+    description: 'Максимально быстрый режим для длинных роликов.',
+    estimate_multiplier: 4.9,
+    skip: 4,
+    refine_mask: false,
+  },
+  {
+    key: 'lama_quality',
+    label: 'LaMa Quality',
+    family: 'lama',
+    description: 'Более чистая очистка за счет refined mask и меньшего skip.',
+    estimate_multiplier: 8.5,
+    skip: 2,
+    refine_mask: true,
+  },
+  {
+    key: 'propainter_quality',
+    label: 'ProPainter',
+    family: 'propainter',
+    description: 'Video-aware quality mode с лучшей temporal consistency.',
+    estimate_multiplier: 19.0,
+    skip: 1,
+    refine_mask: true,
+  },
+];
 
 function fileKey(file) {
   return `${file.name}:${file.size}:${file.lastModified}`;
@@ -103,6 +135,11 @@ function updateMaskMeta() {
   meta.textContent = `${rects.length} рег. · ~${pctLabel}% кадра · +${MASK_EXPAND}px`;
 }
 
+function invalidateQualityAnalysis() {
+  state.qualityAnalysis = null;
+  renderQualityAnalysis();
+}
+
 canvas.addEventListener('mousedown', e => {
   if (!frameImg) return;
   const r = canvas.getBoundingClientRect();
@@ -139,6 +176,7 @@ function commitSelection() {
   if (w < 2 || h < 2) return; // ignore tiny accidental clicks
   regions.push({ x, y, w, h });
   activeIdx = regions.length - 1;
+  invalidateQualityAnalysis();
   syncCoordsToInputs();
   renderRegionsList();
 }
@@ -227,6 +265,7 @@ function selectRegion(i) {
 function deleteRegion(i) {
   regions.splice(i, 1);
   if (activeIdx >= regions.length) activeIdx = regions.length - 1;
+  invalidateQualityAnalysis();
   syncCoordsToInputs();
   renderRegionsList();
   redraw();
@@ -261,6 +300,7 @@ function applyCoords() {
     regions.push({ x, y, w, h });
     activeIdx = regions.length - 1;
   }
+  invalidateQualityAnalysis();
   renderRegionsList();
   redraw();
 }
@@ -268,6 +308,7 @@ function applyCoords() {
 function resetSelection() {
   regions = [];
   activeIdx = -1;
+  invalidateQualityAnalysis();
   syncCoordsToInputs();
   renderRegionsList();
   if (frameImg) redraw();
@@ -279,14 +320,185 @@ function toggleMaskPreview() {
   if (frameImg) redraw();
 }
 
+function formatDurationLabel(seconds) {
+  if (!seconds || seconds <= 0) return null;
+  if (seconds >= 3600) {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.round((seconds % 3600) / 60);
+    return `${hours} ч ${minutes} мин`;
+  }
+  if (seconds >= 60) {
+    const minutes = Math.floor(seconds / 60);
+    const secs = Math.round(seconds % 60);
+    return `${minutes} мин ${secs} с`;
+  }
+  return `${Math.round(seconds)} с`;
+}
+
+function getSelectedEngine() {
+  return state.engines.find(engine => engine.key === state.engine) || state.engines[0] || FALLBACK_AI_ENGINES[0];
+}
+
+function renderEngineList() {
+  const el = document.getElementById('engine-list');
+  if (!state.engines.length) {
+    el.innerHTML = '<div class="regions-empty">Профили AI недоступны</div>';
+    return;
+  }
+  el.innerHTML = state.engines.map(engine => `
+    <button class="btn engine-btn${engine.key === state.engine ? ' is-active' : ''}" onclick="setEngine('${engine.key}')">
+      <span class="engine-copy">
+        <span class="engine-name">${engine.label}</span>
+        <span class="engine-desc">${engine.description}</span>
+      </span>
+      <span class="engine-chip">~${engine.estimate_multiplier}x</span>
+    </button>
+  `).join('');
+}
+
+function updateAiModeMeta() {
+  const warning = document.getElementById('ai-warning');
+  const engineRow = document.getElementById('engine-row');
+  const deviceRow = document.getElementById('device-row');
+  const meta = document.getElementById('engine-meta');
+  const engine = getSelectedEngine();
+
+  engineRow.style.display = mode === 'ai' ? '' : 'none';
+  warning.style.display = mode === 'ai' ? '' : 'none';
+
+  if (mode !== 'ai') {
+    deviceRow.style.display = 'none';
+    return;
+  }
+
+  const needsCuda = engine.family === 'propainter';
+  if (needsCuda) {
+    setDevice('cuda');
+  }
+  deviceRow.style.display = needsCuda ? 'none' : '';
+
+  const estimate = state.duration > 0 ? formatDurationLabel(state.duration * engine.estimate_multiplier) : null;
+  const skipPart = engine.skip > 1 ? `Skip ${engine.skip}` : 'Без skip';
+  const refinePart = engine.refine_mask ? 'refined mask' : 'простая mask';
+  warning.textContent = estimate
+    ? `${engine.label}: ориентир ~${estimate} · ${skipPart} · ${refinePart}.`
+    : `${engine.label}: ${engine.description}`;
+  meta.textContent = `${engine.description} Режим: ${skipPart}. Маска: ${refinePart}.`;
+}
+
+function setEngine(key) {
+  state.engine = key;
+  invalidateQualityAnalysis();
+  renderEngineList();
+  updateAiModeMeta();
+}
+
+async function loadAiEngines() {
+  try {
+    const res = await fetch('/api/ai/engines');
+    if (!res.ok) throw new Error('engine api');
+    state.engines = await res.json();
+  } catch (_) {
+    state.engines = FALLBACK_AI_ENGINES;
+  }
+  if (!state.engines.some(engine => engine.key === state.engine)) {
+    state.engine = state.engines[0]?.key || 'lama_fast';
+  }
+  renderEngineList();
+  updateAiModeMeta();
+}
+
+function renderQualityAnalysis() {
+  const meta = document.getElementById('quality-meta');
+  const grid = document.getElementById('quality-preview-grid');
+  const ref = document.getElementById('quality-reference');
+  const mask = document.getElementById('quality-mask');
+  if (!state.qualityAnalysis) {
+    meta.textContent = 'Для анализа нужен хотя бы один регион и загруженный кадр.';
+    grid.style.display = 'none';
+    ref.removeAttribute('src');
+    mask.removeAttribute('src');
+    return;
+  }
+  const data = state.qualityAnalysis;
+  const coverage = typeof data.mask_coverage === 'number' ? data.mask_coverage.toFixed(3) : '0.000';
+  const bbox = data.mask_bbox || {};
+  meta.textContent =
+    `Engine: ${data.engine?.label || state.engine} · reference ${data.reference_time}s · ` +
+    `регионов ${data.merged_region_count} · автонайдено ${data.suggested_region_count} · ` +
+    `mask ${coverage}% · bbox ${bbox.w || 0}×${bbox.h || 0}`;
+  ref.src = data.reference_url + `?_=${Date.now()}`;
+  mask.src = data.mask_preview_url + `?_=${Date.now()}`;
+  grid.style.display = '';
+}
+
+function updateQualityCardVisibility() {
+  const card = document.getElementById('quality-card');
+  card.style.display = mode === 'ai' ? '' : 'none';
+}
+
+async function analyzeQuality(autodetect = false) {
+  if (!state.path) {
+    alert('Сначала загрузите видеофайл.');
+    return;
+  }
+  if (regions.length === 0) {
+    alert('Нужен хотя бы один регион для quality analyze.');
+    return;
+  }
+
+  const btnAnalyze = document.getElementById('btn-quality-analyze');
+  const btnDetect = document.getElementById('btn-quality-detect');
+  btnAnalyze.disabled = true;
+  btnDetect.disabled = true;
+
+  try {
+    const res = await fetch('/api/quality/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: state.path,
+        duration: state.duration,
+        width: state.width,
+        height: state.height,
+        regions,
+        engine: state.engine,
+        autodetect,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Quality analyze failed');
+    }
+    state.qualityAnalysis = data;
+    if (autodetect && Array.isArray(data.merged_regions) && data.merged_regions.length >= regions.length) {
+      regions = data.merged_regions;
+      activeIdx = regions.length ? regions.length - 1 : -1;
+      syncCoordsToInputs();
+      renderRegionsList();
+      redraw();
+      appendLog(`+ Auto-detect: найдено ${data.suggested_region_count} дополнительных регионов`);
+    } else {
+      appendLog(`+ Quality analyze: mask ${data.mask_coverage.toFixed(3)}%`);
+    }
+    renderQualityAnalysis();
+  } catch (e) {
+    appendLog(`✗ Quality analyze: ${e.message}`);
+    alert('Ошибка quality analyze: ' + e.message);
+  } finally {
+    btnAnalyze.disabled = false;
+    btnDetect.disabled = false;
+  }
+}
+
 // ── Mode toggle ───────────────────────────────────────────────────────────────
 
 function setMode(m) {
   mode = m;
   document.getElementById('btn-mode-delogo').classList.toggle('active', m === 'delogo');
   document.getElementById('btn-mode-ai').classList.toggle('active', m === 'ai');
-  document.getElementById('ai-warning').style.display = m === 'ai' ? '' : 'none';
-  document.getElementById('device-row').style.display  = m === 'ai' ? '' : 'none';
+  updateAiModeMeta();
+  updateQualityCardVisibility();
 }
 
 function setDevice(d) {
@@ -379,6 +591,7 @@ function applyFileInfo(info) {
   state.height   = info.height;
   state.duration = info.duration;
   state.fps      = info.fps;
+  invalidateQualityAnalysis();
 
   const dur = info.duration;
   const mins = Math.floor(dur / 60);
@@ -391,6 +604,7 @@ function applyFileInfo(info) {
   document.getElementById('file-meta').style.display = '';
   document.getElementById('frame-counter').textContent = '▸ ' + info.name;
   updateMaskMeta();
+  updateAiModeMeta();
 }
 
 // ── Frame extraction ──────────────────────────────────────────────────────────
@@ -455,6 +669,7 @@ function startProcessing() {
       height:   state.height,
       mode,
       device,
+      engine: state.engine,
     }));
   };
 
@@ -567,6 +782,7 @@ async function addToQueue() {
     height:   state.height,
     mode,
     device,
+    engine:   state.engine,
   };
   const res = await fetch('/api/queue', {
     method: 'POST',
@@ -607,6 +823,7 @@ async function addAllToQueue() {
       height:   info.height,
       mode,
       device,
+      engine:   state.engine,
     };
     
     try {
@@ -671,3 +888,6 @@ setInterval(async () => {
 }, 2000);
 
 updateMaskMeta();
+updateQualityCardVisibility();
+renderQualityAnalysis();
+loadAiEngines();

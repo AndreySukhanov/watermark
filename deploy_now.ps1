@@ -21,6 +21,10 @@ if ! command -v git >/dev/null 2>&1; then
   apt-get update -qq >/dev/null 2>&1
   apt-get install -y -qq git >/dev/null 2>&1
 fi
+if ! command -v ffmpeg >/dev/null 2>&1; then
+  apt-get update -qq >/dev/null 2>&1
+  apt-get install -y -qq ffmpeg >/dev/null 2>&1
+fi
 mkdir -p /workspace
 if [ ! -d /workspace/watermark/.git ]; then
   rm -rf /workspace/watermark
@@ -38,6 +42,7 @@ else
 fi
 cd /workspace/watermark
 pip install -q -r requirements_web.txt
+bash scripts/setup_propainter_runtime.sh
 pkill -f uvicorn || true
 nohup python3 -m uvicorn server:app --host 0.0.0.0 --port 8000 > server.log 2>&1 &
 echo [Успех] Сервер обновлен и работает в фоне на порту 8000!

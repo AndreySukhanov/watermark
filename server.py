@@ -2,6 +2,7 @@ import asyncio
 import concurrent.futures
 import json
 import math
+import mimetypes
 import os
 import re
 import shutil
@@ -21,12 +22,16 @@ from fastapi.staticfiles import StaticFiles
 
 sys.path.insert(0, str(Path(__file__).parent))
 from services.video_info import get_video_info
+from services.ai_engines import DEFAULT_AI_ENGINE, get_engine_config, list_engine_metadata
 from services.iopaint_runner import (
     generate_mask, extract_frames_range,
     get_total_frames, reassemble_video,
     run_iopaint_parallel, compose_inpainted_frames, thin_frames,
-    write_iopaint_config, get_worker_count,
+    write_iopaint_config, get_worker_count, extract_reference_frame,
+    build_mask_preview, get_mask_stats,
 )
+from services.propainter_runner import ensure_propainter_available, run_propainter_pipeline
+from services.watermark_detector import dedupe_regions, detect_repeated_regions
 
 BASE = Path(__file__).parent
 TEMP = BASE / "temp_web"          # use project dir to avoid 8.3-path issues
@@ -95,7 +100,12 @@ def _cleanup_stale_temp():
             if not path.is_file():
                 continue
 
-            is_known_output = path.match("output_*.mp4") or path.match("frame_*.jpg")
+            is_known_output = (
+                path.match("output_*.mp4")
+                or path.match("frame_*.jpg")
+                or path.match("reference_*.jpg")
+                or path.match("mask_preview_*.png")
+            )
             is_uploaded_source = re.fullmatch(r"[0-9a-fA-F-]{36}", path.stem) is not None
             if is_known_output or is_uploaded_source:
                 path.unlink()
@@ -191,6 +201,100 @@ def _raise_if_cancelled(job_id: str):
     runtime = _runtimes.get(job_id)
     if runtime and runtime.cancel_requested:
         raise JobCancelled("Отменено пользователем")
+
+
+def _reference_time(duration: float) -> float:
+    return min(5.0, max(0.0, duration * 0.25))
+
+
+def _resolve_worker_count(engine_key: str, device: str) -> int:
+    config = get_engine_config(engine_key)
+    if config.worker_count_override > 0 and device == "cuda":
+        return config.worker_count_override
+    return get_worker_count(device)
+
+
+def _normalize_regions(raw_regions: list[dict] | None) -> list[dict]:
+    normalized = []
+    for region in raw_regions or []:
+        try:
+            normalized.append(
+                {
+                    "x": int(region["x"]),
+                    "y": int(region["y"]),
+                    "w": int(region["w"]),
+                    "h": int(region["h"]),
+                }
+            )
+        except Exception:
+            continue
+    return dedupe_regions(normalized)
+
+
+def _build_quality_analysis(body: dict) -> dict:
+    input_path = body.get("path")
+    if not input_path:
+        raise RuntimeError("Не передан путь к видео")
+
+    info = get_video_info(input_path)
+    width = int(body.get("width") or (info.width if info else 0) or 0)
+    height = int(body.get("height") or (info.height if info else 0) or 0)
+    duration = float(body.get("duration") or (info.duration if info else 0) or 0.0)
+    if width <= 0 or height <= 0:
+        raise RuntimeError("Не удалось определить размеры видео")
+
+    base_regions = _normalize_regions(body.get("regions"))
+    if not base_regions:
+        raise RuntimeError("Для quality analysis нужен хотя бы один регион")
+
+    engine_key = body.get("engine") or DEFAULT_AI_ENGINE
+    config = get_engine_config(engine_key)
+    analysis_id = str(uuid.uuid4())
+    work_dir = TEMP / f"ai_preview_{analysis_id}"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    reference_path = TEMP / f"reference_{analysis_id}.jpg"
+    preview_path = TEMP / f"mask_preview_{analysis_id}.png"
+    mask_path = work_dir / "mask.png"
+    reference_time = _reference_time(duration)
+    suggested_regions: list[dict] = []
+
+    try:
+        extract_reference_frame(input_path, reference_path, time_sec=reference_time)
+
+        if body.get("autodetect"):
+            raw_matches = detect_repeated_regions(str(reference_path), base_regions)
+            for candidate in raw_matches:
+                merged = dedupe_regions(base_regions + suggested_regions + [candidate])
+                if len(merged) > len(base_regions) + len(suggested_regions):
+                    suggested_regions.append(candidate)
+
+        merged_regions = dedupe_regions(base_regions + suggested_regions)
+        generate_mask(
+            width,
+            height,
+            merged_regions,
+            mask_path,
+            padding=config.mask_padding,
+            dilate=config.mask_dilate,
+            reference_frame_path=reference_path if config.refine_mask else None,
+        )
+        build_mask_preview(reference_path, mask_path, preview_path)
+        stats = get_mask_stats(mask_path)
+        return {
+            "engine": config.to_metadata(),
+            "reference_time": round(reference_time, 2),
+            "reference_url": f"/api/file/{reference_path.name}",
+            "mask_preview_url": f"/api/file/{preview_path.name}",
+            "base_region_count": len(base_regions),
+            "suggested_region_count": len(suggested_regions),
+            "merged_region_count": len(merged_regions),
+            "suggested_regions": suggested_regions,
+            "merged_regions": merged_regions,
+            "mask_coverage": stats["coverage"],
+            "mask_bbox": stats["bbox"],
+        }
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 @app.on_event("startup")
@@ -303,12 +407,52 @@ async def _run_job(job: QueueJob, out_path: Path):
             raise RuntimeError(f"FFmpeg завершился с кодом {returncode}")
 
 
-def _run_ai_pipeline(
+def _prepare_mask_assets(
+    *,
+    input_path: str,
+    width: int,
+    height: int,
+    duration: float,
+    regions: list[dict],
+    work_dir: Path,
+    engine_key: str,
+    register_process,
+    emit_log,
+):
+    config = get_engine_config(engine_key)
+    mask_path = work_dir / "mask.png"
+    reference_frame_path = None
+    reference_time = _reference_time(duration)
+
+    if config.refine_mask:
+        reference_frame_path = work_dir / "reference.jpg"
+        extract_reference_frame(
+            input_path,
+            reference_frame_path,
+            time_sec=reference_time,
+            register_process=register_process,
+        )
+        emit_log(f"Mask reference frame: {reference_time:.1f}s")
+
+    generate_mask(
+        width,
+        height,
+        regions,
+        mask_path,
+        padding=config.mask_padding,
+        dilate=config.mask_dilate,
+        reference_frame_path=reference_frame_path,
+    )
+    return mask_path, reference_frame_path
+
+
+def _run_lama_pipeline(
     params: dict,
     out_path: Path,
     job_id: str,
     emit_log,
     emit_progress,
+    engine_key: str,
 ):
     fps = params.get("fps", 25) or 25
     width = params.get("width", 1920) or 1920
@@ -324,23 +468,49 @@ def _run_ai_pipeline(
     total_frames = get_total_frames(duration, fps)
     if total_frames <= 0:
         raise RuntimeError("Не удалось определить количество кадров")
+
+    config = get_engine_config(engine_key)
+    skip = max(1, config.skip)
+    worker_count = _resolve_worker_count(engine_key, device)
     actual_total_frames = 0
     pipeline_started_at = time.perf_counter()
-    worker_count = get_worker_count(device)
 
     try:
         _raise_if_cancelled(job_id)
-        to_process = math.ceil(total_frames / FRAME_SKIP)
+        to_process = math.ceil(total_frames / skip)
         emit_log(
-            f"Кадров: {total_frames}. Skip={FRAME_SKIP} → обработка {to_process}. "
-            f"Параллельность: x{worker_count}."
+            f"Engine: {config.label}. Кадров: {total_frames}. "
+            f"Skip={skip} → обработка {to_process}. Параллельность: x{worker_count}."
         )
 
-        mask_path = work_dir / "mask.png"
-        iopaint_config_path = write_iopaint_config(work_dir / "iopaint_config.json")
-        generate_mask(width, height, params.get("regions", []), mask_path)
+        mask_path, reference_frame_path = _prepare_mask_assets(
+            input_path=input_path,
+            width=width,
+            height=height,
+            duration=duration,
+            regions=params.get("regions", []),
+            work_dir=work_dir,
+            engine_key=engine_key,
+            register_process=lambda proc: _register_runtime_process(job_id, proc),
+            emit_log=emit_log,
+        )
+        mask_stats = get_mask_stats(mask_path)
+        emit_log(f"Mask coverage: {mask_stats['coverage']:.3f}%")
         emit_progress(5)
-        emit_log(f"IOPaint config: Resize {json.loads(iopaint_config_path.read_text(encoding='utf-8'))['hd_strategy_resize_limit']}")
+
+        iopaint_config_path = write_iopaint_config(
+            work_dir / "iopaint_config.json",
+            hd_strategy=config.hd_strategy,
+            resize_limit=config.resize_limit,
+        )
+        emit_log(
+            f"IOPaint config: {config.hd_strategy} "
+            f"{json.loads(iopaint_config_path.read_text(encoding='utf-8'))['hd_strategy_resize_limit']}"
+        )
+
+        if reference_frame_path:
+            preview_path = TEMP / f"mask_preview_{job_id}.png"
+            build_mask_preview(reference_frame_path, mask_path, preview_path)
 
         all_inpainted = work_dir / "all_inpainted"
         all_inpainted.mkdir(parents=True, exist_ok=True)
@@ -386,7 +556,7 @@ def _run_ai_pipeline(
 
             _raise_if_cancelled(job_id)
             thin_started_at = time.perf_counter()
-            kept = thin_frames(frames_dir, skip=FRAME_SKIP, kept_dir=kept_dir)
+            kept = thin_frames(frames_dir, skip=skip, kept_dir=kept_dir)
             emit_log(f"  Прореживание: {actual_batch_count} → {kept} кадров")
             emit_log(f"  Thin: {time.perf_counter() - thin_started_at:.1f}s")
 
@@ -416,6 +586,10 @@ def _run_ai_pipeline(
                 inpainted_dir,
                 all_inpainted,
                 mask_path,
+                feather_radius=config.feather_radius,
+                output_suffix=config.output_suffix,
+                output_quality=config.output_quality,
+                blend_skipped=config.blend_skipped,
             )
             emit_log(f"  Compose: {time.perf_counter() - compose_started_at:.1f}s")
             if written != actual_batch_count:
@@ -457,6 +631,58 @@ def _run_ai_pipeline(
         _clear_runtime(job_id)
 
 
+def _run_propainter_quality(
+    params: dict,
+    out_path: Path,
+    job_id: str,
+    emit_log,
+    emit_progress,
+    engine_key: str,
+):
+    work_dir = TEMP / f"ai_{job_id}"
+    runtime = _ensure_runtime(job_id)
+    runtime.work_dir = work_dir
+    runtime.cancel_requested = False
+    config = get_engine_config(engine_key)
+    started_at = time.perf_counter()
+
+    try:
+        ensure_propainter_available()
+        emit_log(f"Engine: {config.label}. Video-aware quality mode.")
+        run_propainter_pipeline(
+            params["path"],
+            params.get("regions", []),
+            out_path,
+            work_dir,
+            config,
+            emit_log=emit_log,
+            emit_progress=emit_progress,
+            register_process=lambda proc: _register_runtime_process(job_id, proc),
+            is_cancelled=lambda: _ensure_runtime(job_id).cancel_requested,
+        )
+        emit_log(f"Готово за {time.perf_counter() - started_at:.1f}s")
+    except subprocess.CalledProcessError as e:
+        details = (e.stderr or e.output or "").strip()
+        raise RuntimeError(details or str(e)) from e
+    finally:
+        _cleanup_work_dir(work_dir)
+        _clear_runtime(job_id)
+
+
+def _run_ai_pipeline(
+    params: dict,
+    out_path: Path,
+    job_id: str,
+    emit_log,
+    emit_progress,
+):
+    engine_key = params.get("engine") or DEFAULT_AI_ENGINE
+    config = get_engine_config(engine_key)
+    if config.family == "propainter":
+        return _run_propainter_quality(params, out_path, job_id, emit_log, emit_progress, engine_key)
+    return _run_lama_pipeline(params, out_path, job_id, emit_log, emit_progress, engine_key)
+
+
 def _start_ai_pipeline(loop, params: dict, out_path: Path, job_id: str) -> asyncio.Queue:
     queue: asyncio.Queue = asyncio.Queue()
 
@@ -482,6 +708,21 @@ def _start_ai_pipeline(loop, params: dict, out_path: Path, job_id: str) -> async
 @app.get("/")
 async def index():
     return FileResponse(str(BASE / "static" / "index.html"))
+
+
+@app.get("/api/ai/engines")
+async def ai_engines():
+    return list_engine_metadata()
+
+
+@app.post("/api/quality/analyze")
+async def quality_analyze(body: dict):
+    _touch_activity()
+    loop = asyncio.get_event_loop()
+    try:
+        return await loop.run_in_executor(_executor, lambda: _build_quality_analysis(body))
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
 
 
 @app.post("/api/queue")
@@ -689,6 +930,15 @@ async def download(filename: str):
     if not path.exists():
         return JSONResponse({"error": "Файл не найден"}, status_code=404)
     return FileResponse(str(path), filename=filename, media_type="video/mp4")
+
+
+@app.get("/api/file/{filename}")
+async def temp_file(filename: str):
+    path = TEMP / filename
+    if not path.exists():
+        return JSONResponse({"error": "Файл не найден"}, status_code=404)
+    media_type, _ = mimetypes.guess_type(path.name)
+    return FileResponse(str(path), filename=path.name, media_type=media_type or "application/octet-stream")
 
 
 @app.get("/health")

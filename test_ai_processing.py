@@ -6,8 +6,10 @@ Supports either:
 - VIDEO_FILE=C:\path\to\video.mp4 for upload mode
 """
 import io
+import json
 import sys
 import time
+from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
@@ -17,19 +19,9 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="repla
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 
-WATERMARK_REGIONS = [
-    {"x": 0, "y": 80, "w": 320, "h": 110},
-    {"x": 850, "y": 40, "w": 320, "h": 110},
-    {"x": 1660, "y": 10, "w": 260, "h": 110},
-    {"x": 400, "y": 260, "w": 320, "h": 110},
-    {"x": 1250, "y": 230, "w": 320, "h": 110},
-    {"x": 0, "y": 400, "w": 320, "h": 110},
-    {"x": 510, "y": 430, "w": 320, "h": 110},
-    {"x": 1020, "y": 410, "w": 320, "h": 110},
-    {"x": 80, "y": 580, "w": 320, "h": 110},
-    {"x": 820, "y": 610, "w": 320, "h": 110},
-    {"x": 1440, "y": 590, "w": 320, "h": 110},
-]
+WATERMARK_REGIONS = json.loads(
+    (Path(__file__).parent / "assets" / "arab_watermark_regions.json").read_text(encoding="utf-8")
+)
 
 
 with sync_playwright() as p:
