@@ -103,10 +103,38 @@
           <div id="ai-warning" style="display:none" class="warn-text">
             ⚠ Медленно: ~1 сек/кадр на CPU. Для 3-минутного видео ≈ 5 мин.
           </div>
+          <div id="engine-row" style="display:none; margin-top:8px">
+            <div class="card-title card-subtitle">AI Engine</div>
+            <div class="engine-list" id="engine-list">
+              <div class="regions-empty">Загрузка профилей AI…</div>
+            </div>
+            <div class="engine-meta" id="engine-meta">—</div>
+          </div>
           <div id="device-row" style="display:none; margin-top:8px">
             <div class="mode-row">
               <button id="btn-cpu" class="mode-btn active" onclick="setDevice('cpu')">CPU</button>
               <button id="btn-cuda" class="mode-btn" onclick="setDevice('cuda')">GPU (CUDA)</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" id="quality-card" style="display:none">
+          <div class="card-title">Quality Analyze</div>
+          <div class="row gap-6">
+            <button class="btn btn-sm" id="btn-quality-analyze" onclick="analyzeQuality(false)">Обновить mask</button>
+            <button class="btn btn-sm" id="btn-quality-detect" onclick="analyzeQuality(true)">Найти похожие</button>
+          </div>
+          <div class="quality-meta" id="quality-meta">
+            Для анализа нужен хотя бы один регион и загруженный кадр.
+          </div>
+          <div class="quality-preview-grid" id="quality-preview-grid" style="display:none">
+            <div class="quality-preview-item">
+              <div class="label-inline">Reference Frame</div>
+              <img id="quality-reference" alt="Reference frame preview">
+            </div>
+            <div class="quality-preview-item">
+              <div class="label-inline">Refined Mask</div>
+              <img id="quality-mask" alt="Mask preview">
             </div>
           </div>
         </div>

@@ -6,12 +6,12 @@ set -e
 echo "=== Watermark Remover — RunPod Setup ==="
 
 # 1. System deps
-echo "[1/4] Installing system dependencies..."
+echo "[1/5] Installing system dependencies..."
 apt-get update -qq && apt-get install -y -qq ffmpeg curl git > /dev/null 2>&1
 echo "  ✓ ffmpeg, curl, git installed"
 
 # 2. Clone or copy project
-echo "[2/4] Setting up project..."
+echo "[2/5] Setting up project..."
 cd /workspace
 if [ -d "watermark" ]; then
     echo "  → Project dir exists, pulling updates..."
@@ -31,12 +31,17 @@ else
 fi
 
 # 3. Python deps
-echo "[3/4] Installing Python dependencies..."
+echo "[3/5] Installing Python dependencies..."
 pip install -q -r requirements_web.txt 2>&1 | tail -5
 echo "  ✓ Python packages installed"
 
-# 4. Check GPU
-echo "[4/4] Checking GPU..."
+# 4. Prepare ProPainter runtime
+echo "[4/5] Preparing ProPainter runtime..."
+bash scripts/setup_propainter_runtime.sh
+echo "  ✓ ProPainter runtime ready"
+
+# 5. Check GPU
+echo "[5/5] Checking GPU..."
 python3 -c "
 import torch
 if torch.cuda.is_available():
