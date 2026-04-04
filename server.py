@@ -38,8 +38,8 @@ app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
 _executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 _active: dict[str, subprocess.Popen] = {}
 
-BATCH_SIZE = 500   # frames per batch; ~5 GB peak disk at 10 MB/frame
-FRAME_SKIP = 4     # process every Nth frame (4 = process 1, skip 3)
+BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "500"))
+FRAME_SKIP = int(os.environ.get("FRAME_SKIP", "4"))
 
 # ── Auto-stop on inactivity ─────────────────────────────────────────────────
 IDLE_TIMEOUT = int(os.environ.get("IDLE_TIMEOUT_MINUTES", "30")) * 60  # seconds

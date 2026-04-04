@@ -3,6 +3,7 @@ import math
 import os
 import shutil
 from bisect import bisect_left
+from functools import lru_cache
 from pathlib import Path
 import subprocess
 import threading
@@ -10,12 +11,21 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from PIL import Image, ImageDraw, ImageFilter
 
-MASK_PADDING = 8
-MASK_DILATE = 4
-IOPAINT_HD_STRATEGY = "Resize"
-IOPAINT_RESIZE_LIMIT = 1024
-FINAL_FRAME_SUFFIX = ".jpg"
-FINAL_FRAME_QUALITY = 95
+MASK_PADDING = int(os.environ.get("MASK_PADDING", "8"))
+MASK_DILATE = int(os.environ.get("MASK_DILATE", "4"))
+IOPAINT_HD_STRATEGY = os.environ.get("IOPAINT_HD_STRATEGY", "Resize")
+IOPAINT_RESIZE_LIMIT = int(os.environ.get("IOPAINT_RESIZE_LIMIT", "1024"))
+FINAL_FRAME_SUFFIX = os.environ.get("FINAL_FRAME_SUFFIX", ".jpg").lower()
+if FINAL_FRAME_SUFFIX not in {".jpg", ".png"}:
+    FINAL_FRAME_SUFFIX = ".jpg"
+FINAL_FRAME_QUALITY = int(os.environ.get("FINAL_FRAME_QUALITY", "99"))
+COMPOSE_FEATHER_RADIUS = int(os.environ.get("COMPOSE_FEATHER_RADIUS", "2"))
+COMPOSE_BLEND_SKIPPED = os.environ.get("COMPOSE_BLEND_SKIPPED", "1").lower() not in {
+    "0",
+    "false",
+    "no",
+}
+
 
 # Number of parallel IOPaint workers (LAMA uses ~1.5 GB VRAM each)
 def get_worker_count(device="cpu"):
@@ -107,6 +117,15 @@ def _nearest_number(sorted_numbers, target):
     before = sorted_numbers[idx - 1]
     after = sorted_numbers[idx]
     return before if abs(target - before) <= abs(after - target) else after
+
+
+def _neighbor_numbers(sorted_numbers, target):
+    if not sorted_numbers:
+        return None, None
+    idx = bisect_left(sorted_numbers, target)
+    prev_num = sorted_numbers[idx - 1] if idx > 0 else None
+    next_num = sorted_numbers[idx] if idx < len(sorted_numbers) else None
+    return prev_num, next_num
 
 
 def extract_frames_range(input_path, frames_dir, start_frame, count, fps, register_process=None):
@@ -253,7 +272,6 @@ def run_iopaint_parallel(frames_dir, mask_path, output_dir, device="cpu",
     if is_cancelled and is_cancelled():
         return False, "Отменено пользователем"
 
-    # If fewer frames than workers, just run single process
     if len(all_frames) <= workers:
         rc, out = run_iopaint_sync(
             frames_dir,
@@ -267,7 +285,6 @@ def run_iopaint_parallel(frames_dir, mask_path, output_dir, device="cpu",
             return False, f"IOPaint error (code {rc}): {out[-500:]}"
         return True, None
 
-    # Split frames into sub-dirs
     chunk_size = math.ceil(len(all_frames) / workers)
     sub_dirs = []
     sub_outs = []
@@ -298,7 +315,6 @@ def run_iopaint_parallel(frames_dir, mask_path, output_dir, device="cpu",
             for proc in started_processes:
                 _terminate_process(proc)
 
-    # Run in parallel
     with ThreadPoolExecutor(max_workers=len(sub_dirs)) as pool:
         futures = {
             pool.submit(
@@ -324,13 +340,11 @@ def run_iopaint_parallel(frames_dir, mask_path, output_dir, device="cpu",
         _terminate_started()
         return False, "Отменено пользователем"
 
-    # Merge sub-outputs into output_dir
     for so in sub_outs:
         for f in so.glob("*.png"):
             shutil.move(str(f), str(output_dir / f.name))
         shutil.rmtree(so, ignore_errors=True)
 
-    # Cleanup sub-input dirs
     for sd in sub_dirs:
         shutil.rmtree(sd, ignore_errors=True)
 
@@ -342,7 +356,7 @@ def compose_inpainted_frames(
     inpainted_dir,
     output_dir,
     mask_path,
-    feather_radius=6,
+    feather_radius=COMPOSE_FEATHER_RADIUS,
     output_suffix=FINAL_FRAME_SUFFIX,
 ):
     """Compose final frames as original + masked region from nearest inpainted frame.
@@ -381,25 +395,51 @@ def compose_inpainted_frames(
 
     compose_workers = min(len(original_frames), max(1, min(8, (os.cpu_count() or 4))))
 
+    @lru_cache(maxsize=32)
+    def _load_source_crop(frame_num: int):
+        with Image.open(inpainted_map[frame_num]) as source_image:
+            return source_image.convert("RGB").crop(mask_bbox).copy()
+
     def _compose_one(original_path):
         output_path = output_dir / f"{original_path.stem}{output_suffix}"
         frame_num = int(original_path.stem)
-        source_num = frame_num if frame_num in inpainted_map else _nearest_number(inpainted_nums, frame_num)
-        if source_num is None:
-            return 0
-
-        with Image.open(original_path) as original_image, Image.open(inpainted_map[source_num]) as source_image:
+        with Image.open(original_path) as original_image:
             original_img = original_image.convert("RGB")
-            source_img = source_image.convert("RGB")
             original_crop = original_img.crop(mask_bbox)
-            source_crop = source_img.crop(mask_bbox)
+
+            if frame_num in inpainted_map:
+                source_crop = _load_source_crop(frame_num)
+            elif COMPOSE_BLEND_SKIPPED:
+                prev_num, next_num = _neighbor_numbers(inpainted_nums, frame_num)
+                if prev_num is None and next_num is None:
+                    return 0
+                if prev_num is None:
+                    source_crop = _load_source_crop(next_num)
+                elif next_num is None or prev_num == next_num:
+                    source_crop = _load_source_crop(prev_num)
+                else:
+                    alpha = (frame_num - prev_num) / max(1, next_num - prev_num)
+                    source_crop = Image.blend(
+                        _load_source_crop(prev_num),
+                        _load_source_crop(next_num),
+                        alpha,
+                    )
+            else:
+                source_num = _nearest_number(inpainted_nums, frame_num)
+                if source_num is None:
+                    return 0
+                source_crop = _load_source_crop(source_num)
+
             composed_crop = Image.composite(source_crop, original_crop, blend_mask)
             original_img.paste(composed_crop, mask_bbox)
-            original_img.save(
-                output_path,
-                quality=FINAL_FRAME_QUALITY,
-                subsampling=0,
-            )
+            if output_suffix == ".png":
+                original_img.save(output_path)
+            else:
+                original_img.save(
+                    output_path,
+                    quality=FINAL_FRAME_QUALITY,
+                    subsampling=0,
+                )
         return 1
 
     with ThreadPoolExecutor(max_workers=compose_workers) as pool:
@@ -419,15 +459,12 @@ def fill_skipped_frames(all_inpainted_dir, total_frames, skip=2):
     if not existing_nums:
         return
 
-    # For each missing frame, copy from nearest existing
     existing_set = set(existing_nums)
-    # Build a lookup: for any frame number, find nearest existing
     prev_existing = existing_nums[0]
     for num in range(1, total_frames + 1):
         if num in existing_set:
             prev_existing = num
             continue
-        # Copy from the last existing frame we saw
         src = all_dir / f"{prev_existing:06d}.png"
         dst = all_dir / f"{num:06d}.png"
         shutil.copy2(str(src), str(dst))
