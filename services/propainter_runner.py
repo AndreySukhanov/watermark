@@ -98,6 +98,7 @@ def run_propainter_pipeline(
     mask_path = work_dir / "mask.png"
     frames_dir = work_dir / "source_frames"
     output_root = work_dir / "propainter_output"
+    frames_dir.mkdir(parents=True, exist_ok=True)
 
     emit_log(f"ProPainter: reference frame {reference_time:.1f}s")
     emit_progress(4)
