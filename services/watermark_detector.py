@@ -61,19 +61,28 @@ def dedupe_regions(regions: list[dict], iou_threshold: float = 0.45) -> list[dic
 
 
 def _prepare_match_surface(image: np.ndarray) -> np.ndarray:
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    whiteness = (
+        hsv[:, :, 2].astype(np.float32) * (255 - hsv[:, :, 1]).astype(np.float32) / 255.0
+    ).astype(np.uint8)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     blur = cv2.GaussianBlur(gray, (0, 0), 3.0)
     detail = cv2.addWeighted(gray, 1.8, blur, -0.8, 0)
     edges = cv2.Canny(detail, 40, 120)
-    return cv2.addWeighted(detail, 0.75, edges, 0.25, 0)
+    surface = cv2.addWeighted(whiteness, 0.75, detail, 0.2, 0)
+    return cv2.addWeighted(surface, 0.9, edges, 0.1, 0)
 
 
 def _build_template_mask(template_bgr: np.ndarray) -> np.ndarray | None:
+    hsv = cv2.cvtColor(template_bgr, cv2.COLOR_BGR2HSV)
     gray = cv2.cvtColor(template_bgr, cv2.COLOR_BGR2GRAY)
+    whiteness = (
+        hsv[:, :, 2].astype(np.float32) * (255 - hsv[:, :, 1]).astype(np.float32) / 255.0
+    ).astype(np.uint8)
     blur = cv2.GaussianBlur(gray, (0, 0), 2.2)
     detail = cv2.addWeighted(gray, 1.9, blur, -0.9, 0)
     edges = cv2.Canny(detail, 30, 110)
-    _, bright = cv2.threshold(detail, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    _, bright = cv2.threshold(whiteness, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     mask = cv2.bitwise_or(edges, bright)
     kernel = np.ones((3, 3), np.uint8)
     mask = cv2.dilate(mask, kernel, iterations=1)

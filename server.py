@@ -262,8 +262,22 @@ def _build_quality_analysis(body: dict) -> dict:
         extract_reference_frame(input_path, reference_path, time_sec=reference_time)
 
         if body.get("autodetect"):
-            raw_matches = detect_repeated_regions(str(reference_path), base_regions)
-            for candidate in raw_matches:
+            autodetect_passes = max(1, int(body.get("autodetect_passes") or (3 if len(base_regions) >= 3 else 1)))
+            autodetect_limit = max(
+                len(base_regions),
+                int(body.get("autodetect_limit") or (12 if len(base_regions) >= 3 else min(18, len(base_regions) + 12))),
+            )
+            current_regions = list(base_regions)
+            for _ in range(autodetect_passes):
+                detected = detect_repeated_regions(str(reference_path), current_regions)
+                merged = dedupe_regions(detected)
+                if len(merged) <= len(current_regions):
+                    break
+                current_regions = merged[:autodetect_limit]
+                if len(current_regions) >= autodetect_limit:
+                    break
+
+            for candidate in current_regions:
                 merged = dedupe_regions(base_regions + suggested_regions + [candidate])
                 if len(merged) > len(base_regions) + len(suggested_regions):
                     suggested_regions.append(candidate)
