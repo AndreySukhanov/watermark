@@ -107,6 +107,9 @@ def main():
         env["BENCH_ENGINES"] = "propainter_quality"
         env["ENGINE_OPTIONS_JSON"] = json.dumps({"propainter_quality": options}, ensure_ascii=False)
         env["BENCH_OUTPUT_DIR"] = str(preset_dir)
+        if env.get("SERVER_VIDEO") and env.get("CLIP_SERVER_VIDEO"):
+            base_clip = Path(env["CLIP_SERVER_VIDEO"])
+            env["CLIP_SERVER_VIDEO"] = str(base_clip.with_name(f"{base_clip.stem}_{stamp}_{name}{base_clip.suffix}"))
 
         print(f"\n=== {name} ===", flush=True)
         print(json.dumps(options, ensure_ascii=False), flush=True)

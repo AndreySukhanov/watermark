@@ -81,6 +81,10 @@ def get_server_clip_info() -> dict:
             "или уберите SERVER_VIDEO, чтобы скрипт сам создал локальный клип и загрузил его."
         )
 
+    if CLIP_SERVER_VIDEO and SERVER_VIDEO and Path(SERVER_VIDEO).exists() and not Path(CLIP_SERVER_VIDEO).exists():
+        log(f"[clip] Создаю server-side клип: {CLIP_SERVER_VIDEO}")
+        create_server_clip(Path(SERVER_VIDEO), Path(CLIP_SERVER_VIDEO))
+
     info = fetch_video_info(remote_path)
     if is_valid_info(info):
         return info
