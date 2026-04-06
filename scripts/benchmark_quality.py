@@ -113,6 +113,8 @@ def fetch_quality_analysis(info: dict, engine: str, regions: list[dict], out_dir
         },
         timeout=600,
     )
+    if not res.ok:
+        log(f"[analysis:error] {res.status_code}: {res.text[:2000]}")
     res.raise_for_status()
     data = res.json()
     (out_dir / "analysis.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -143,6 +145,8 @@ def enqueue_job(info: dict, engine: str, regions: list[dict]) -> str:
         "engine_options": engine_options,
     }
     res = requests.post(f"{BASE_URL}/api/queue", json=payload, timeout=120)
+    if not res.ok:
+        log(f"[queue:error] {res.status_code}: {res.text[:2000]}")
     res.raise_for_status()
     return res.json()["job_id"]
 
