@@ -14,6 +14,7 @@ CLIP_SERVER_VIDEO = os.environ.get("CLIP_SERVER_VIDEO", "").strip()
 CLIP_OFFSET = float(os.environ.get("BENCH_OFFSET", "0"))
 CLIP_DURATION = float(os.environ.get("BENCH_DURATION", "15"))
 ENGINES = [item.strip() for item in os.environ.get("BENCH_ENGINES", "lama_fast,lama_quality,propainter_quality").split(",") if item.strip()]
+ENGINE_OPTIONS = json.loads(os.environ.get("ENGINE_OPTIONS_JSON", "{}") or "{}")
 REGIONS_PATH = Path(os.environ.get("REGIONS_FILE", str(Path(__file__).resolve().parents[1] / "assets" / "arab_watermark_regions.json")))
 OUTPUT_ROOT = Path(os.environ.get("BENCH_OUTPUT_DIR", str(Path(__file__).resolve().parents[1] / "output" / "quality_benchmark")))
 OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
@@ -89,7 +90,15 @@ def load_regions() -> list[dict]:
     return json.loads(REGIONS_PATH.read_text(encoding="utf-8"))
 
 
+def get_engine_options(engine: str) -> dict:
+    if not isinstance(ENGINE_OPTIONS, dict):
+        return {}
+    options = ENGINE_OPTIONS.get(engine, {})
+    return options if isinstance(options, dict) else {}
+
+
 def fetch_quality_analysis(info: dict, engine: str, regions: list[dict], out_dir: Path) -> dict:
+    engine_options = get_engine_options(engine)
     res = requests.post(
         f"{BASE_URL}/api/quality/analyze",
         json={
@@ -99,6 +108,7 @@ def fetch_quality_analysis(info: dict, engine: str, regions: list[dict], out_dir
             "height": info["height"],
             "regions": regions,
             "engine": engine,
+            "engine_options": engine_options,
             "autodetect": False,
         },
         timeout=600,
@@ -118,6 +128,7 @@ def fetch_quality_analysis(info: dict, engine: str, regions: list[dict], out_dir
 
 
 def enqueue_job(info: dict, engine: str, regions: list[dict]) -> str:
+    engine_options = get_engine_options(engine)
     payload = {
         "path": info["path"],
         "name": f"{engine}_{info['name']}",
@@ -129,6 +140,7 @@ def enqueue_job(info: dict, engine: str, regions: list[dict]) -> str:
         "mode": "ai",
         "device": "cuda",
         "engine": engine,
+        "engine_options": engine_options,
     }
     res = requests.post(f"{BASE_URL}/api/queue", json=payload, timeout=120)
     res.raise_for_status()
@@ -208,6 +220,7 @@ def main():
 
         entry = {
             "engine": engine,
+            "engine_options": get_engine_options(engine),
             "job_id": job_id,
             "status": job["status"],
             "elapsed_seconds": job["elapsed_seconds"],

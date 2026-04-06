@@ -13,6 +13,7 @@ temp_web/
 .claude/
 *.log
 output/
+test001/
 
 # Local test media and debug artifacts
 Араб.mp4
