@@ -81,9 +81,60 @@ def get_server_clip_info() -> dict:
             "или уберите SERVER_VIDEO, чтобы скрипт сам создал локальный клип и загрузил его."
         )
 
+    info = fetch_video_info(remote_path)
+    if is_valid_info(info):
+        return info
+
+    if CLIP_SERVER_VIDEO and SERVER_VIDEO and Path(SERVER_VIDEO).exists():
+        log(f"[clip] Пересоздаю server-side клип: {CLIP_SERVER_VIDEO}")
+        create_server_clip(Path(SERVER_VIDEO), Path(CLIP_SERVER_VIDEO))
+        info = fetch_video_info(CLIP_SERVER_VIDEO)
+        if is_valid_info(info):
+            return info
+
+    raise RuntimeError(f"Некорректные метаданные клипа {remote_path}: {info}")
+
+
+def fetch_video_info(remote_path: str) -> dict:
     res = requests.get(f"{BASE_URL}/api/info", params={"path": remote_path}, timeout=120)
     res.raise_for_status()
     return res.json()
+
+
+def is_valid_info(info: dict) -> bool:
+    return (
+        int(info.get("width") or 0) > 0
+        and int(info.get("height") or 0) > 0
+        and float(info.get("duration") or 0) > 0
+        and float(info.get("fps") or 0) > 0
+    )
+
+
+def create_server_clip(source_path: Path, clip_path: Path):
+    clip_path.parent.mkdir(parents=True, exist_ok=True)
+    run(
+        [
+            "ffmpeg",
+            "-y",
+            "-ss",
+            str(CLIP_OFFSET),
+            "-i",
+            str(source_path),
+            "-t",
+            str(CLIP_DURATION),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "18",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            str(clip_path),
+        ]
+    )
 
 
 def load_regions() -> list[dict]:
