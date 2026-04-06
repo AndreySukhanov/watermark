@@ -67,6 +67,38 @@ DEFAULT_PRESETS = [
             "propainter_fp16": True,
         },
     },
+    {
+        "name": "rect_mask_tight_960",
+        "options": {
+            "refine_mask": False,
+            "propainter_width": 960,
+            "propainter_height": 540,
+            "propainter_subvideo_length": 30,
+            "propainter_neighbor_length": 10,
+            "propainter_ref_stride": 10,
+            "propainter_mask_dilation": 6,
+            "mask_padding": 4,
+            "mask_dilate": 2,
+            "feather_radius": 3,
+            "propainter_fp16": True,
+        },
+    },
+    {
+        "name": "rect_mask_wide_960",
+        "options": {
+            "refine_mask": False,
+            "propainter_width": 960,
+            "propainter_height": 540,
+            "propainter_subvideo_length": 30,
+            "propainter_neighbor_length": 10,
+            "propainter_ref_stride": 10,
+            "propainter_mask_dilation": 10,
+            "mask_padding": 18,
+            "mask_dilate": 8,
+            "feather_radius": 4,
+            "propainter_fp16": True,
+        },
+    },
 ]
 
 
