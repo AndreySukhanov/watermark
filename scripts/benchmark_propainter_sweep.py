@@ -92,7 +92,8 @@ def main():
     run_root.mkdir(parents=True, exist_ok=True)
 
     script_path = Path(__file__).with_name("benchmark_quality.py")
-    presets = load_presets()
+    start_index = max(0, int(os.environ.get("PROPAINTER_SWEEP_START_INDEX", "0")))
+    presets = load_presets()[start_index:]
     summary = {"started_at": stamp, "presets": []}
 
     for preset in presets:
