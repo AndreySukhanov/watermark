@@ -1,5 +1,5 @@
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 
 
 @dataclass(frozen=True)
@@ -99,6 +99,62 @@ AI_ENGINES: dict[str, AIEngineConfig] = {
 }
 
 DEFAULT_AI_ENGINE = "lama_fast"
+
+_INT_OVERRIDE_LIMITS: dict[str, tuple[int, int]] = {
+    "skip": (1, 8),
+    "mask_padding": (0, 80),
+    "mask_dilate": (0, 80),
+    "feather_radius": (0, 24),
+    "worker_count_override": (0, 16),
+    "resize_limit": (256, 2160),
+    "output_quality": (70, 100),
+    "propainter_width": (320, 1920),
+    "propainter_height": (180, 1080),
+    "propainter_subvideo_length": (8, 120),
+    "propainter_neighbor_length": (1, 60),
+    "propainter_ref_stride": (1, 80),
+    "propainter_mask_dilation": (0, 120),
+}
+_BOOL_OVERRIDE_KEYS = {"refine_mask", "blend_skipped", "propainter_fp16"}
+_STR_OVERRIDE_KEYS = {
+    "hd_strategy": {"Original", "Resize", "Crop"},
+    "output_suffix": {".jpg", ".jpeg", ".png"},
+}
+
+
+def _coerce_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() not in {"0", "false", "no", "off", ""}
+
+
+def _coerce_int(value, min_value: int, max_value: int) -> int:
+    result = int(value)
+    return max(min_value, min(max_value, result))
+
+
+def resolve_engine_config(engine: str | None, overrides: dict | None = None) -> AIEngineConfig:
+    config = get_engine_config(engine)
+    if not isinstance(overrides, dict) or not overrides:
+        return config
+
+    updates = {}
+    for key, value in overrides.items():
+        if key in _INT_OVERRIDE_LIMITS:
+            try:
+                updates[key] = _coerce_int(value, *_INT_OVERRIDE_LIMITS[key])
+            except (TypeError, ValueError):
+                continue
+        elif key in _BOOL_OVERRIDE_KEYS:
+            updates[key] = _coerce_bool(value)
+        elif key in _STR_OVERRIDE_KEYS and value in _STR_OVERRIDE_KEYS[key]:
+            updates[key] = value
+
+    if not updates:
+        return config
+    return replace(config, **updates)
 
 
 def get_engine_config(engine: str | None) -> AIEngineConfig:

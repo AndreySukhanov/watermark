@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 
 sys.path.insert(0, str(Path(__file__).parent))
 from services.video_info import get_video_info
-from services.ai_engines import DEFAULT_AI_ENGINE, get_engine_config, list_engine_metadata
+from services.ai_engines import DEFAULT_AI_ENGINE, resolve_engine_config, list_engine_metadata
 from services.iopaint_runner import (
     generate_mask, extract_frames_range,
     get_total_frames, reassemble_video,
@@ -207,8 +207,7 @@ def _reference_time(duration: float) -> float:
     return min(5.0, max(0.0, duration * 0.25))
 
 
-def _resolve_worker_count(engine_key: str, device: str) -> int:
-    config = get_engine_config(engine_key)
+def _resolve_worker_count(config, device: str) -> int:
     if config.worker_count_override > 0 and device == "cuda":
         return config.worker_count_override
     return get_worker_count(device)
@@ -248,7 +247,7 @@ def _build_quality_analysis(body: dict) -> dict:
         raise RuntimeError("Для quality analysis нужен хотя бы один регион")
 
     engine_key = body.get("engine") or DEFAULT_AI_ENGINE
-    config = get_engine_config(engine_key)
+    config = resolve_engine_config(engine_key, body.get("engine_options"))
     analysis_id = str(uuid.uuid4())
     work_dir = TEMP / f"ai_preview_{analysis_id}"
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -429,11 +428,10 @@ def _prepare_mask_assets(
     duration: float,
     regions: list[dict],
     work_dir: Path,
-    engine_key: str,
+    config,
     register_process,
     emit_log,
 ):
-    config = get_engine_config(engine_key)
     mask_path = work_dir / "mask.png"
     reference_frame_path = None
     reference_time = _reference_time(duration)
@@ -483,9 +481,9 @@ def _run_lama_pipeline(
     if total_frames <= 0:
         raise RuntimeError("Не удалось определить количество кадров")
 
-    config = get_engine_config(engine_key)
+    config = resolve_engine_config(engine_key, params.get("engine_options"))
     skip = max(1, config.skip)
-    worker_count = _resolve_worker_count(engine_key, device)
+    worker_count = _resolve_worker_count(config, device)
     actual_total_frames = 0
     pipeline_started_at = time.perf_counter()
 
@@ -504,7 +502,7 @@ def _run_lama_pipeline(
             duration=duration,
             regions=params.get("regions", []),
             work_dir=work_dir,
-            engine_key=engine_key,
+            config=config,
             register_process=lambda proc: _register_runtime_process(job_id, proc),
             emit_log=emit_log,
         )
@@ -657,7 +655,7 @@ def _run_propainter_quality(
     runtime = _ensure_runtime(job_id)
     runtime.work_dir = work_dir
     runtime.cancel_requested = False
-    config = get_engine_config(engine_key)
+    config = resolve_engine_config(engine_key, params.get("engine_options"))
     started_at = time.perf_counter()
 
     try:
@@ -691,7 +689,7 @@ def _run_ai_pipeline(
     emit_progress,
 ):
     engine_key = params.get("engine") or DEFAULT_AI_ENGINE
-    config = get_engine_config(engine_key)
+    config = resolve_engine_config(engine_key, params.get("engine_options"))
     if config.family == "propainter":
         return _run_propainter_quality(params, out_path, job_id, emit_log, emit_progress, engine_key)
     return _run_lama_pipeline(params, out_path, job_id, emit_log, emit_progress, engine_key)
