@@ -8,9 +8,9 @@ from pathlib import Path
 
 DEFAULT_PRESETS = [
     {
-        "name": "rotated_band_960",
+        "name": "wide_to_rotated_band_960",
         "options": {
-            "mask_shape": "rotated_band",
+            "mask_shape": "wide_to_rotated_band",
             "refine_mask": False,
             "propainter_width": 960,
             "propainter_height": 540,
