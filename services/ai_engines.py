@@ -27,6 +27,8 @@ class AIEngineConfig:
     propainter_ref_stride: int = 10
     propainter_mask_dilation: int = 4
     propainter_fp16: bool = True
+    temporal_mask_samples: int = 0
+    temporal_mask_min_hits: int = 2
 
     def to_metadata(self) -> dict:
         data = asdict(self)
@@ -38,6 +40,7 @@ class AIEngineConfig:
             "estimate_multiplier": data["estimate_multiplier"],
             "skip": data["skip"],
             "refine_mask": data["refine_mask"],
+            "temporal_mask_samples": data["temporal_mask_samples"],
         }
 
 
@@ -57,22 +60,6 @@ AI_ENGINES: dict[str, AIEngineConfig] = {
         worker_count_override=int(os.environ.get("ENGINE_LAMA_FAST_WORKERS", "8")),
         resize_limit=int(os.environ.get("ENGINE_LAMA_FAST_RESIZE", "1024")),
         output_quality=int(os.environ.get("ENGINE_LAMA_FAST_JPEG_QUALITY", "99")),
-    ),
-    "lama_quality": AIEngineConfig(
-        key="lama_quality",
-        label="LaMa Quality",
-        family="lama",
-        description="Более чистая очистка за счет refined mask и меньшего skip.",
-        estimate_multiplier=float(os.environ.get("ENGINE_LAMA_QUALITY_X", "8.5")),
-        skip=int(os.environ.get("ENGINE_LAMA_QUALITY_SKIP", "2")),
-        refine_mask=True,
-        mask_padding=int(os.environ.get("ENGINE_LAMA_QUALITY_MASK_PADDING", "16")),
-        mask_dilate=int(os.environ.get("ENGINE_LAMA_QUALITY_MASK_DILATE", "8")),
-        feather_radius=int(os.environ.get("ENGINE_LAMA_QUALITY_FEATHER", "4")),
-        blend_skipped=False,
-        worker_count_override=int(os.environ.get("ENGINE_LAMA_QUALITY_WORKERS", "4")),
-        resize_limit=int(os.environ.get("ENGINE_LAMA_QUALITY_RESIZE", "1536")),
-        output_quality=int(os.environ.get("ENGINE_LAMA_QUALITY_JPEG_QUALITY", "100")),
     ),
     "propainter_quality": AIEngineConfig(
         key="propainter_quality",
@@ -95,6 +82,8 @@ AI_ENGINES: dict[str, AIEngineConfig] = {
         propainter_ref_stride=int(os.environ.get("ENGINE_PROPAINTER_REF_STRIDE", "10")),
         propainter_mask_dilation=int(os.environ.get("ENGINE_PROPAINTER_MASK_DILATION", "4")),
         propainter_fp16=os.environ.get("ENGINE_PROPAINTER_FP16", "1").lower() not in {"0", "false", "no"},
+        temporal_mask_samples=int(os.environ.get("ENGINE_PROPAINTER_TEMPORAL_MASK_SAMPLES", "6")),
+        temporal_mask_min_hits=int(os.environ.get("ENGINE_PROPAINTER_TEMPORAL_MASK_MIN_HITS", "2")),
     ),
 }
 
@@ -114,6 +103,8 @@ _INT_OVERRIDE_LIMITS: dict[str, tuple[int, int]] = {
     "propainter_neighbor_length": (1, 60),
     "propainter_ref_stride": (1, 80),
     "propainter_mask_dilation": (0, 120),
+    "temporal_mask_samples": (0, 16),
+    "temporal_mask_min_hits": (1, 16),
 }
 _BOOL_OVERRIDE_KEYS = {"refine_mask", "blend_skipped", "propainter_fp16"}
 _STR_OVERRIDE_KEYS = {

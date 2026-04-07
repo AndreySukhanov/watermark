@@ -28,7 +28,7 @@ from services.iopaint_runner import (
     get_total_frames, reassemble_video,
     run_iopaint_parallel, compose_inpainted_frames, thin_frames,
     write_iopaint_config, get_worker_count, extract_reference_frame,
-    build_mask_preview, get_mask_stats,
+    build_mask_preview, get_mask_stats, generate_temporal_mask,
 )
 from services.propainter_runner import ensure_propainter_available, run_propainter_pipeline
 from services.watermark_detector import dedupe_regions, detect_repeated_regions
@@ -282,15 +282,30 @@ def _build_quality_analysis(body: dict) -> dict:
                     suggested_regions.append(candidate)
 
         merged_regions = dedupe_regions(base_regions + suggested_regions)
-        generate_mask(
-            width,
-            height,
-            merged_regions,
-            mask_path,
-            padding=config.mask_padding,
-            dilate=config.mask_dilate,
-            reference_frame_path=reference_path if config.refine_mask else None,
-        )
+        if config.temporal_mask_samples > 1:
+            generate_temporal_mask(
+                input_path,
+                width,
+                height,
+                duration,
+                merged_regions,
+                mask_path,
+                work_dir=work_dir,
+                padding=config.mask_padding,
+                dilate=config.mask_dilate,
+                samples=config.temporal_mask_samples,
+                min_hits=config.temporal_mask_min_hits,
+            )
+        else:
+            generate_mask(
+                width,
+                height,
+                merged_regions,
+                mask_path,
+                padding=config.mask_padding,
+                dilate=config.mask_dilate,
+                reference_frame_path=reference_path if config.refine_mask else None,
+            )
         build_mask_preview(reference_path, mask_path, preview_path)
         stats = get_mask_stats(mask_path)
         return {

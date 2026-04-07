@@ -9,6 +9,8 @@ import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import cv2
+import numpy as np
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 MASK_PADDING = int(os.environ.get("MASK_PADDING", "8"))
@@ -117,6 +119,110 @@ def generate_mask(
         img = img.filter(ImageFilter.MaxFilter(kernel))
         img = img.point(lambda p: 255 if p >= 18 else 0)
     img.save(str(out_path))
+
+
+def _temporal_sample_times(duration: float, sample_count: int) -> list[float]:
+    sample_count = max(1, int(sample_count))
+    if duration <= 0:
+        return [0.0]
+    if sample_count == 1:
+        return [min(5.0, max(0.0, duration * 0.25))]
+    start = min(max(0.3, duration * 0.05), max(0.0, duration - 0.2))
+    end = max(start, min(max(0.6, duration - 0.3), duration * 0.92))
+    return [round(float(t), 3) for t in np.linspace(start, end, sample_count)]
+
+
+def _temporal_region_candidate(crop: Image.Image) -> np.ndarray:
+    rgb = np.asarray(crop.convert("RGB"))
+    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    value = hsv[:, :, 2].astype(np.float32)
+    saturation = hsv[:, :, 1].astype(np.float32)
+    blur = cv2.GaussianBlur(gray, (0, 0), 6).astype(np.float32)
+    detail = gray.astype(np.float32) - blur
+    bright_low_sat = (value >= 120) & (saturation <= 95)
+    bright_detail = detail >= 7
+    candidate = (bright_low_sat & bright_detail).astype(np.uint8) * 255
+    if candidate.max() == 0:
+        candidate = ((value >= 145) & (saturation <= 115)).astype(np.uint8) * 255
+    kernel = np.ones((3, 3), np.uint8)
+    candidate = cv2.morphologyEx(candidate, cv2.MORPH_OPEN, kernel)
+    return candidate
+
+
+def generate_temporal_mask(
+    input_video,
+    width,
+    height,
+    duration,
+    regions,
+    out_path,
+    *,
+    work_dir,
+    padding=MASK_PADDING,
+    dilate=MASK_DILATE,
+    samples=6,
+    min_hits=2,
+    register_process=None,
+) -> list[Path]:
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    refs_dir = Path(work_dir) / "temporal_refs"
+    refs_dir.mkdir(parents=True, exist_ok=True)
+
+    reference_paths: list[Path] = []
+    for idx, sample_time in enumerate(_temporal_sample_times(float(duration), int(samples)), start=1):
+        ref_path = refs_dir / f"ref_{idx:02d}.jpg"
+        extract_reference_frame(input_video, ref_path, time_sec=sample_time, register_process=register_process)
+        reference_paths.append(ref_path)
+
+    if not reference_paths:
+        generate_mask(width, height, regions, out_path, padding=padding, dilate=dilate)
+        return []
+
+    frames = [Image.open(path).convert("RGB") for path in reference_paths]
+    mask = Image.new("L", (width, height), 0)
+
+    try:
+        for region in regions:
+            x0 = max(0, int(region["x"]) - padding)
+            y0 = max(0, int(region["y"]) - padding)
+            x1 = min(width, int(region["x"]) + int(region["w"]) + padding)
+            y1 = min(height, int(region["y"]) + int(region["h"]) + padding)
+            if x1 <= x0 or y1 <= y0:
+                continue
+
+            hits = None
+            for frame in frames:
+                candidate = _temporal_region_candidate(frame.crop((x0, y0, x1, y1)))
+                if hits is None:
+                    hits = np.zeros(candidate.shape, dtype=np.uint16)
+                hits += (candidate > 0).astype(np.uint16)
+
+            if hits is None:
+                continue
+            threshold = max(1, min(int(min_hits), len(frames)))
+            region_mask = (hits >= threshold).astype(np.uint8) * 255
+            coverage = float(region_mask.mean() / 255.0)
+            if coverage < MASK_MIN_RATIO:
+                continue
+            if coverage > MASK_MAX_RATIO:
+                threshold = min(len(frames), threshold + 1)
+                region_mask = (hits >= threshold).astype(np.uint8) * 255
+            region_mask = cv2.morphologyEx(region_mask, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+            mask.paste(Image.fromarray(region_mask, mode="L"), (x0, y0))
+    finally:
+        for frame in frames:
+            frame.close()
+
+    if dilate > 0:
+        kernel = max(3, dilate * 2 + 1)
+        if kernel % 2 == 0:
+            kernel += 1
+        mask = mask.filter(ImageFilter.MaxFilter(kernel))
+        mask = mask.point(lambda p: 255 if p >= 18 else 0)
+    mask.save(str(out_path))
+    return reference_paths
 
 
 def _terminate_process(proc):
