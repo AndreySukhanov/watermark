@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from services.ai_engines import AIEngineConfig
-from services.iopaint_runner import extract_reference_frame, generate_mask
+from services.iopaint_runner import extract_reference_frame, generate_mask, generate_temporal_mask
 from services.video_info import get_video_info
 
 PROPAINTER_DIR = Path(os.environ.get("PROPAINTER_DIR", "/workspace/ProPainter"))
@@ -108,15 +108,35 @@ def run_propainter_pipeline(
         time_sec=reference_time,
         register_process=register_process,
     )
-    generate_mask(
-        info.width,
-        info.height,
-        regions,
-        mask_path,
-        padding=engine_config.mask_padding,
-        dilate=engine_config.mask_dilate,
-        reference_frame_path=reference_frame_path,
-    )
+    if engine_config.temporal_mask_samples > 1:
+        emit_log(
+            "ProPainter: temporal mask "
+            f"samples={engine_config.temporal_mask_samples} min_hits={engine_config.temporal_mask_min_hits}"
+        )
+        generate_temporal_mask(
+            input_video,
+            info.width,
+            info.height,
+            info.duration,
+            regions,
+            mask_path,
+            work_dir=work_dir,
+            padding=engine_config.mask_padding,
+            dilate=engine_config.mask_dilate,
+            samples=engine_config.temporal_mask_samples,
+            min_hits=engine_config.temporal_mask_min_hits,
+            register_process=register_process,
+        )
+    else:
+        generate_mask(
+            info.width,
+            info.height,
+            regions,
+            mask_path,
+            padding=engine_config.mask_padding,
+            dilate=engine_config.mask_dilate,
+            reference_frame_path=reference_frame_path if engine_config.refine_mask else None,
+        )
 
     emit_log("ProPainter: извлечение исходных кадров...")
     extract_started = time.perf_counter()

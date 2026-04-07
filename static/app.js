@@ -50,15 +50,6 @@ const FALLBACK_AI_ENGINES = [
     refine_mask: false,
   },
   {
-    key: 'lama_quality',
-    label: 'LaMa Quality',
-    family: 'lama',
-    description: 'Более чистая очистка за счет refined mask и меньшего skip.',
-    estimate_multiplier: 8.5,
-    skip: 2,
-    refine_mask: true,
-  },
-  {
     key: 'propainter_quality',
     label: 'ProPainter',
     family: 'propainter',
