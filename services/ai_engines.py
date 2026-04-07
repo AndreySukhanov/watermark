@@ -29,6 +29,7 @@ class AIEngineConfig:
     propainter_fp16: bool = True
     temporal_mask_samples: int = 0
     temporal_mask_min_hits: int = 2
+    mask_shape: str = "auto"
 
     def to_metadata(self) -> dict:
         data = asdict(self)
@@ -41,6 +42,7 @@ class AIEngineConfig:
             "skip": data["skip"],
             "refine_mask": data["refine_mask"],
             "temporal_mask_samples": data["temporal_mask_samples"],
+            "mask_shape": data["mask_shape"],
         }
 
 
@@ -84,6 +86,7 @@ AI_ENGINES: dict[str, AIEngineConfig] = {
         propainter_fp16=os.environ.get("ENGINE_PROPAINTER_FP16", "1").lower() not in {"0", "false", "no"},
         temporal_mask_samples=int(os.environ.get("ENGINE_PROPAINTER_TEMPORAL_MASK_SAMPLES", "0")),
         temporal_mask_min_hits=int(os.environ.get("ENGINE_PROPAINTER_TEMPORAL_MASK_MIN_HITS", "2")),
+        mask_shape=os.environ.get("ENGINE_PROPAINTER_MASK_SHAPE", "auto"),
     ),
 }
 
@@ -110,6 +113,7 @@ _BOOL_OVERRIDE_KEYS = {"refine_mask", "blend_skipped", "propainter_fp16"}
 _STR_OVERRIDE_KEYS = {
     "hd_strategy": {"Original", "Resize", "Crop"},
     "output_suffix": {".jpg", ".jpeg", ".png"},
+    "mask_shape": {"auto", "rotated_band"},
 }
 
 

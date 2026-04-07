@@ -8,6 +8,24 @@ from pathlib import Path
 
 DEFAULT_PRESETS = [
     {
+        "name": "rotated_band_960",
+        "options": {
+            "mask_shape": "rotated_band",
+            "refine_mask": False,
+            "propainter_width": 960,
+            "propainter_height": 540,
+            "propainter_subvideo_length": 30,
+            "propainter_neighbor_length": 10,
+            "propainter_ref_stride": 10,
+            "propainter_mask_dilation": 6,
+            "mask_padding": 0,
+            "mask_dilate": 2,
+            "feather_radius": 3,
+            "temporal_mask_samples": 0,
+            "propainter_fp16": True,
+        },
+    },
+    {
         "name": "glyph_mask_tight_960",
         "options": {
             "refine_mask": True,
