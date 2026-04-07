@@ -282,7 +282,7 @@ def _build_quality_analysis(body: dict) -> dict:
                     suggested_regions.append(candidate)
 
         merged_regions = dedupe_regions(base_regions + suggested_regions)
-        if config.mask_shape == "rotated_band":
+        if config.mask_shape in {"rotated_band", "wide_to_rotated_band"}:
             generate_rotated_band_mask(
                 width,
                 height,

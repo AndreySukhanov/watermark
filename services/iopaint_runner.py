@@ -158,10 +158,11 @@ def generate_rotated_band_mask(
     out_path,
     *,
     angle_degrees=-17.0,
-    length_ratio=0.82,
-    thickness_ratio=0.30,
+    length_ratio=0.72,
+    thickness_ratio=0.20,
     padding=0,
     dilate=MASK_DILATE,
+    cy_ratio=0.62,
 ):
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -181,7 +182,7 @@ def generate_rotated_band_mask(
         if w <= 0 or h <= 0:
             continue
         cx = x + w / 2.0
-        cy = y + h / 2.0
+        cy = y + h * float(cy_ratio)
         band_len = max(24.0, w * float(length_ratio) + padding * 2.0)
         band_thick = max(12.0, h * float(thickness_ratio) + max(0, padding) * 0.5)
         hx = dx * band_len / 2.0
