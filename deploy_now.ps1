@@ -8,16 +8,41 @@ if (-not $repoUrl) {
     throw "Не настроен git remote origin."
 }
 
-$ghToken = ""
+$gitAuthHeader = ""
 try {
     $ghToken = (gh auth token 2>$null).Trim()
+    if ($ghToken) {
+        $gitAuthHeader = "Authorization: Bearer $ghToken"
+    }
 } catch {
-    $ghToken = ""
+    $gitAuthHeader = ""
+}
+
+if (-not $gitAuthHeader) {
+    try {
+        $originUri = [Uri]$repoUrl
+        $credentialInput = "protocol=$($originUri.Scheme)`nhost=$($originUri.Host)`n`n"
+        $credentialLines = $credentialInput | git credential fill 2>$null
+        $credential = @{}
+        foreach ($line in $credentialLines) {
+            $parts = $line -split "=", 2
+            if ($parts.Count -eq 2) {
+                $credential[$parts[0]] = $parts[1]
+            }
+        }
+        if ($credential.username -and $credential.password) {
+            $basicToken = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($credential.username):$($credential.password)"))
+            $gitAuthHeader = "Authorization: Basic $basicToken"
+        }
+    } catch {
+        $gitAuthHeader = ""
+    }
 }
 
 $gitAuthSetup = "GIT_OPTS=()"
-if ($ghToken) {
-    $gitAuthSetup = "GIT_AUTH_HEADER='Authorization: Bearer $ghToken'`nGIT_OPTS=(-c `"http.extraHeader=`$GIT_AUTH_HEADER`")"
+if ($gitAuthHeader) {
+    $escapedGitAuthHeader = $gitAuthHeader.Replace("'", "'\''")
+    $gitAuthSetup = "GIT_AUTH_HEADER='$escapedGitAuthHeader'`nGIT_OPTS=(-c `"http.extraHeader=`$GIT_AUTH_HEADER`")"
 }
 
 $sshKey = Join-Path $env:USERPROFILE ".ssh\id_ed25519"
