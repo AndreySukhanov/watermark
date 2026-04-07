@@ -52,7 +52,7 @@ if ($gitAuthHeader) {
 }
 
 try {
-    & git bundle create $localBundle HEAD
+    & git bundle create $localBundle main
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to create git bundle."
     }
