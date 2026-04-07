@@ -113,7 +113,7 @@ _BOOL_OVERRIDE_KEYS = {"refine_mask", "blend_skipped", "propainter_fp16"}
 _STR_OVERRIDE_KEYS = {
     "hd_strategy": {"Original", "Resize", "Crop"},
     "output_suffix": {".jpg", ".jpeg", ".png"},
-    "mask_shape": {"auto", "rotated_band"},
+    "mask_shape": {"auto", "rotated_band", "wide_to_rotated_band"},
 }
 
 
