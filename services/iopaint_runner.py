@@ -57,19 +57,49 @@ def _build_band_mask(width: int, height: int) -> Image.Image:
     return band.filter(ImageFilter.GaussianBlur(1)).point(lambda p: 255 if p >= 18 else 0)
 
 
+def _filter_text_like_components(candidate: np.ndarray, crop_width: int, crop_height: int) -> np.ndarray:
+    binary = (candidate > 0).astype(np.uint8) * 255
+    if binary.max() == 0:
+        return binary
+
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
+    filtered = np.zeros_like(binary)
+    max_area = max(80, int(crop_width * crop_height * 0.035))
+    max_width = max(24, int(crop_width * 0.38))
+    max_height = max(16, int(crop_height * 0.60))
+
+    for idx in range(1, count):
+        x, y, w, h, area = stats[idx]
+        if area < 4:
+            continue
+        if area > max_area or w > max_width or h > max_height:
+            continue
+        density = area / float(max(1, w * h))
+        if density > 0.82 and area > 48:
+            continue
+        filtered[labels == idx] = 255
+    return filtered
+
+
 def _refine_region_mask(frame_crop: Image.Image) -> Image.Image:
     gray = frame_crop.convert("L")
     blur = gray.filter(ImageFilter.GaussianBlur(10))
     detail = ImageChops.subtract(gray, blur)
-    bright = gray.point(lambda p: 255 if p >= 132 else 0)
-    detail = detail.point(lambda p: 255 if p >= 16 else 0)
+    bright = gray.point(lambda p: 255 if p >= 136 else 0)
+    detail = detail.point(lambda p: 255 if p >= 18 else 0)
     candidate = ImageChops.multiply(bright, detail).point(lambda p: 255 if p >= 60 else 0)
-    candidate = candidate.filter(ImageFilter.MaxFilter(5))
-    candidate = candidate.filter(ImageFilter.GaussianBlur(1))
-    candidate = candidate.point(lambda p: 255 if p >= 22 else 0)
+
+    candidate_np = np.asarray(candidate, dtype=np.uint8)
+    candidate_np = _filter_text_like_components(candidate_np, *frame_crop.size)
+    candidate = Image.fromarray(candidate_np, mode="L")
+    candidate = candidate.filter(ImageFilter.MaxFilter(3))
+    candidate = candidate.filter(ImageFilter.GaussianBlur(0.8))
+    candidate = candidate.point(lambda p: 255 if p >= 18 else 0)
 
     ratio = _mask_pixel_ratio(candidate)
-    if MASK_MIN_RATIO <= ratio <= MASK_MAX_RATIO:
+    if MASK_MIN_RATIO <= ratio <= min(MASK_MAX_RATIO, 0.075):
+        return candidate
+    if ratio > 0:
         return candidate
     return _build_band_mask(*frame_crop.size)
 
@@ -140,12 +170,11 @@ def _temporal_region_candidate(crop: Image.Image) -> np.ndarray:
     saturation = hsv[:, :, 1].astype(np.float32)
     blur = cv2.GaussianBlur(gray, (0, 0), 6).astype(np.float32)
     detail = gray.astype(np.float32) - blur
-    bright_low_sat = (value >= 120) & (saturation <= 95)
-    bright_detail = detail >= 7
+    bright_low_sat = (value >= 138) & (saturation <= 75)
+    bright_detail = detail >= 10
     candidate = (bright_low_sat & bright_detail).astype(np.uint8) * 255
-    if candidate.max() == 0:
-        candidate = ((value >= 145) & (saturation <= 115)).astype(np.uint8) * 255
-    kernel = np.ones((3, 3), np.uint8)
+    candidate = _filter_text_like_components(candidate, crop.size[0], crop.size[1])
+    kernel = np.ones((2, 2), np.uint8)
     candidate = cv2.morphologyEx(candidate, cv2.MORPH_OPEN, kernel)
     return candidate
 
