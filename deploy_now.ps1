@@ -53,7 +53,10 @@ if ($gitAuthHeader) {
     $gitAuthSetup = "GIT_AUTH_HEADER='$escapedGitAuthHeader'`nGIT_OPTS=(-c `"http.extraHeader=`$GIT_AUTH_HEADER`")"
 }
 
-$runpodApiKey = ($env:RUNPOD_API_KEY ?? "").Trim()
+$runpodApiKey = ""
+if ($env:RUNPOD_API_KEY) {
+    $runpodApiKey = $env:RUNPOD_API_KEY.Trim()
+}
 $runtimeEnvSetup = @(
     "export RUNPOD_POD_ID='$remotePodId'"
     "export IDLE_TIMEOUT_MINUTES='$remoteIdleTimeoutMinutes'"
