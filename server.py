@@ -36,6 +36,7 @@ from services.propainter_runner import (
     ensure_propainter_available,
     plan_propainter_crop_groups,
     run_propainter_pipeline,
+    tighten_propainter_regions,
 )
 from services.watermark_segmenter import generate_hf_segmenter_mask, generate_hybrid_segmenter_mask
 from services.watermark_detector import dedupe_regions, detect_repeated_regions
@@ -334,6 +335,10 @@ def _build_quality_analysis(body: dict) -> dict:
                     suggested_regions.append(candidate)
 
         merged_regions = dedupe_regions(base_regions + suggested_regions)
+        if config.family == "propainter" and config.propainter_tighten_regions:
+            merged_regions = dedupe_regions(
+                tighten_propainter_regions(reference_path, merged_regions, width, height)
+            )
         if config.mask_shape == "hybrid_segmenter":
             generate_hybrid_segmenter_mask(
                 reference_path,

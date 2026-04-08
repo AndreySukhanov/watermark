@@ -6,6 +6,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageFilter
 
 from services.ai_engines import AIEngineConfig
@@ -181,6 +182,102 @@ def plan_propainter_crop_groups(width: int, height: int, regions: list[dict], en
             }
         )
     return result
+
+
+def _watermark_signal_map(patch: np.ndarray) -> np.ndarray:
+    max_rgb = patch.max(axis=2)
+    min_rgb = patch.min(axis=2)
+    saturation = np.where(max_rgb > 1e-6, (max_rgb - min_rgb) / max_rgb, 0.0)
+    luminance = patch.mean(axis=2)
+    return np.clip((luminance - 0.42) * 2.4 - saturation * 1.5, 0.0, 1.0)
+
+
+def _integral_image(image: np.ndarray) -> np.ndarray:
+    return np.pad(image.cumsum(axis=0).cumsum(axis=1), ((1, 0), (1, 0)))
+
+
+def _box_sum(integral: np.ndarray, x: int, y: int, width: int, height: int) -> float:
+    return (
+        integral[y + height, x + width]
+        - integral[y, x + width]
+        - integral[y + height, x]
+        + integral[y, x]
+    )
+
+
+def tighten_propainter_regions(
+    reference_frame_path: Path,
+    regions: list[dict],
+    width: int,
+    height: int,
+) -> list[dict]:
+    if not regions:
+        return []
+
+    tightened = []
+    with Image.open(reference_frame_path) as reference_image:
+        frame = np.asarray(reference_image.convert("RGB"), dtype=np.float32) / 255.0
+
+    for region in regions:
+        x = max(0, int(region["x"]))
+        y = max(0, int(region["y"]))
+        w = max(1, int(region["w"]))
+        h = max(1, int(region["h"]))
+        x1 = min(width, x + w)
+        y1 = min(height, y + h)
+        if x1 <= x or y1 <= y:
+            tightened.append(dict(region))
+            continue
+
+        patch = frame[y:y1, x:x1]
+        if patch.size == 0:
+            tightened.append(dict(region))
+            continue
+
+        signal = _watermark_signal_map(patch)
+        if float(signal.max()) < 0.12 or patch.shape[1] < 120 or patch.shape[0] < 48:
+            tightened.append({"x": x, "y": y, "w": x1 - x, "h": y1 - y})
+            continue
+
+        patch_w = patch.shape[1]
+        patch_h = patch.shape[0]
+        win_w = min(patch_w, max(96, int(round(patch_w * 0.72))))
+        win_h = min(patch_h, max(42, int(round(patch_h * 0.62))))
+        if win_w >= patch_w or win_h >= patch_h:
+            tightened.append({"x": x, "y": y, "w": patch_w, "h": patch_h})
+            continue
+
+        integral = _integral_image(signal)
+        best_score = None
+        best_xy = (0, 0)
+        for yy in range(0, max(1, patch_h - win_h + 1), 2):
+            for xx in range(0, max(1, patch_w - win_w + 1), 2):
+                score = _box_sum(integral, xx, yy, win_w, win_h)
+                cx = xx + win_w / 2.0
+                cy = yy + win_h / 2.0
+                score -= abs(cx - patch_w / 2.0) * 0.03
+                score -= abs(cy - patch_h / 2.0) * 0.05
+                if best_score is None or score > best_score:
+                    best_score = score
+                    best_xy = (xx, yy)
+
+        pad_x = max(4, int(round(patch_w * 0.04)))
+        pad_y = max(4, int(round(patch_h * 0.06)))
+        xx, yy = best_xy
+        tx0 = max(0, xx - pad_x)
+        ty0 = max(0, yy - pad_y)
+        tx1 = min(patch_w, xx + win_w + pad_x)
+        ty1 = min(patch_h, yy + win_h + pad_y)
+        tightened.append(
+            {
+                "x": x + tx0,
+                "y": y + ty0,
+                "w": tx1 - tx0,
+                "h": ty1 - ty0,
+            }
+        )
+
+    return tightened
 
 
 def _translate_regions(regions: list[dict], box) -> list[dict]:
@@ -479,12 +576,16 @@ def _run_propainter_full_frame_pipeline(
         time_sec=reference_time,
         register_process=register_process,
     )
+    effective_regions = regions
+    if engine_config.propainter_tighten_regions:
+        effective_regions = tighten_propainter_regions(reference_frame_path, regions, info.width, info.height)
+        emit_log(f"ProPainter: tightened regions {len(effective_regions)}")
     _build_mask(
         reference_frame_path=reference_frame_path,
         mask_path=mask_path,
         width=info.width,
         height=info.height,
-        regions=regions,
+        regions=effective_regions,
         engine_config=engine_config,
         emit_log=emit_log,
         input_video=input_video,
@@ -577,9 +678,6 @@ def _run_propainter_crop_pipeline(
     reference_frame_path = work_dir / "reference.jpg"
     source_frames_dir = work_dir / "source_frames"
     composed_frames_dir = work_dir / "composed_frames"
-    crop_groups = plan_propainter_crop_groups(info.width, info.height, regions, engine_config)
-    if not crop_groups:
-        raise RuntimeError("Не удалось построить crop-группы для ProPainter")
 
     emit_log(f"ProPainter crop: reference frame {reference_time:.1f}s")
     emit_progress(4)
@@ -589,6 +687,14 @@ def _run_propainter_crop_pipeline(
         time_sec=reference_time,
         register_process=register_process,
     )
+    effective_regions = regions
+    if engine_config.propainter_tighten_regions:
+        effective_regions = tighten_propainter_regions(reference_frame_path, regions, info.width, info.height)
+        emit_log(f"ProPainter: tightened regions {len(effective_regions)}")
+
+    crop_groups = plan_propainter_crop_groups(info.width, info.height, effective_regions, engine_config)
+    if not crop_groups:
+        raise RuntimeError("Не удалось построить crop-группы для ProPainter")
     emit_log(f"ProPainter crop groups: {len(crop_groups)}")
     for group in crop_groups:
         emit_log(
