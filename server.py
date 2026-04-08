@@ -31,7 +31,7 @@ from services.iopaint_runner import (
     build_mask_preview, get_mask_stats, generate_temporal_mask,
 )
 from services.propainter_runner import ensure_propainter_available, run_propainter_pipeline
-from services.watermark_segmenter import generate_hf_segmenter_mask
+from services.watermark_segmenter import generate_hf_segmenter_mask, generate_hybrid_segmenter_mask
 from services.watermark_detector import dedupe_regions, detect_repeated_regions
 
 BASE = Path(__file__).parent
@@ -283,7 +283,18 @@ def _build_quality_analysis(body: dict) -> dict:
                     suggested_regions.append(candidate)
 
         merged_regions = dedupe_regions(base_regions + suggested_regions)
-        if config.mask_shape == "hf_segmenter":
+        if config.mask_shape == "hybrid_segmenter":
+            generate_hybrid_segmenter_mask(
+                reference_path,
+                mask_path,
+                width=width,
+                height=height,
+                regions=merged_regions,
+                padding=config.mask_padding,
+                dilate=config.mask_dilate,
+                threshold=config.segmenter_threshold,
+            )
+        elif config.mask_shape == "hf_segmenter":
             generate_hf_segmenter_mask(
                 reference_path,
                 mask_path,
@@ -463,7 +474,7 @@ def _prepare_mask_assets(
     reference_frame_path = None
     reference_time = _reference_time(duration)
 
-    if config.refine_mask or config.mask_shape == "hf_segmenter":
+    if config.refine_mask or config.mask_shape in {"hf_segmenter", "hybrid_segmenter"}:
         reference_frame_path = work_dir / "reference.jpg"
         extract_reference_frame(
             input_path,
@@ -473,7 +484,18 @@ def _prepare_mask_assets(
         )
         emit_log(f"Mask reference frame: {reference_time:.1f}s")
 
-    if config.mask_shape == "hf_segmenter":
+    if config.mask_shape == "hybrid_segmenter":
+        generate_hybrid_segmenter_mask(
+            reference_frame_path,
+            mask_path,
+            width=width,
+            height=height,
+            regions=regions,
+            padding=config.mask_padding,
+            dilate=config.mask_dilate,
+            threshold=config.segmenter_threshold,
+        )
+    elif config.mask_shape == "hf_segmenter":
         generate_hf_segmenter_mask(
             reference_frame_path,
             mask_path,
