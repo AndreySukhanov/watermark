@@ -31,6 +31,7 @@ class AIEngineConfig:
     propainter_mask_dilation: int = 4
     propainter_fp16: bool = True
     propainter_use_crops: bool = False
+    propainter_tighten_regions: bool = True
     propainter_crop_padding: int = 64
     propainter_crop_merge_gap: int = 64
     propainter_crop_max_width: int = 1120
@@ -52,6 +53,7 @@ class AIEngineConfig:
             "segmenter_threshold": data["segmenter_threshold"],
             "segmenter_weights": data["segmenter_weights"],
             "propainter_use_crops": data["propainter_use_crops"],
+            "propainter_tighten_regions": data["propainter_tighten_regions"],
             "temporal_mask_samples": data["temporal_mask_samples"],
         }
 
@@ -101,6 +103,7 @@ AI_ENGINES: dict[str, AIEngineConfig] = {
         propainter_mask_dilation=int(os.environ.get("ENGINE_PROPAINTER_MASK_DILATION", "4")),
         propainter_fp16=os.environ.get("ENGINE_PROPAINTER_FP16", "1").lower() not in {"0", "false", "no"},
         propainter_use_crops=os.environ.get("ENGINE_PROPAINTER_USE_CROPS", "1").lower() not in {"0", "false", "no"},
+        propainter_tighten_regions=os.environ.get("ENGINE_PROPAINTER_TIGHTEN_REGIONS", "1").lower() not in {"0", "false", "no"},
         propainter_crop_padding=int(os.environ.get("ENGINE_PROPAINTER_CROP_PADDING", "64")),
         propainter_crop_merge_gap=int(os.environ.get("ENGINE_PROPAINTER_CROP_GAP", "64")),
         propainter_crop_max_width=int(os.environ.get("ENGINE_PROPAINTER_CROP_MAX_WIDTH", "1120")),
@@ -136,7 +139,13 @@ _INT_OVERRIDE_LIMITS: dict[str, tuple[int, int]] = {
 _FLOAT_OVERRIDE_LIMITS: dict[str, tuple[float, float]] = {
     "segmenter_threshold": (0.05, 0.95),
 }
-_BOOL_OVERRIDE_KEYS = {"refine_mask", "blend_skipped", "propainter_fp16", "propainter_use_crops"}
+_BOOL_OVERRIDE_KEYS = {
+    "refine_mask",
+    "blend_skipped",
+    "propainter_fp16",
+    "propainter_use_crops",
+    "propainter_tighten_regions",
+}
 _STR_OVERRIDE_KEYS = {
     "hd_strategy": {"Original", "Resize", "Crop"},
     "output_suffix": {".jpg", ".jpeg", ".png"},
