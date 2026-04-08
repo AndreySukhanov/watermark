@@ -12,6 +12,7 @@ DEFAULT_PRESETS = [
         "options": {
             "mask_shape": "hybrid_segmenter",
             "refine_mask": False,
+            "segmenter_weights": "segmenter_universal.pth",
             "propainter_width": 960,
             "propainter_height": 540,
             "propainter_subvideo_length": 30,
@@ -31,6 +32,7 @@ DEFAULT_PRESETS = [
         "options": {
             "mask_shape": "hf_segmenter",
             "refine_mask": False,
+            "segmenter_weights": "segmenter_universal.pth",
             "propainter_width": 960,
             "propainter_height": 540,
             "propainter_subvideo_length": 30,

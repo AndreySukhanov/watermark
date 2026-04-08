@@ -120,6 +120,7 @@ def run_propainter_pipeline(
             padding=engine_config.mask_padding,
             dilate=engine_config.mask_dilate,
             threshold=engine_config.segmenter_threshold,
+            weights_name=engine_config.segmenter_weights,
         )
     elif engine_config.mask_shape == "hf_segmenter":
         emit_log("ProPainter: HF segmenter mask")
@@ -132,6 +133,7 @@ def run_propainter_pipeline(
             padding=engine_config.mask_padding,
             dilate=engine_config.mask_dilate,
             threshold=engine_config.segmenter_threshold,
+            weights_name=engine_config.segmenter_weights,
         )
     elif engine_config.temporal_mask_samples > 1:
         emit_log(
