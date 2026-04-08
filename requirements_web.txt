@@ -5,3 +5,7 @@ aiofiles>=23.2.1
 Pillow==9.5.0
 iopaint==1.6.0
 opencv-python-headless
+segmentation-models-pytorch
+huggingface_hub
+torchvision
+timm
