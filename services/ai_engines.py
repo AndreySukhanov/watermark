@@ -31,10 +31,10 @@ class AIEngineConfig:
     propainter_mask_dilation: int = 4
     propainter_fp16: bool = True
     propainter_use_crops: bool = False
-    propainter_crop_padding: int = 80
-    propainter_crop_merge_gap: int = 48
-    propainter_crop_max_width: int = 896
-    propainter_crop_max_height: int = 384
+    propainter_crop_padding: int = 64
+    propainter_crop_merge_gap: int = 64
+    propainter_crop_max_width: int = 1120
+    propainter_crop_max_height: int = 640
     temporal_mask_samples: int = 0
     temporal_mask_min_hits: int = 2
 
@@ -101,10 +101,10 @@ AI_ENGINES: dict[str, AIEngineConfig] = {
         propainter_mask_dilation=int(os.environ.get("ENGINE_PROPAINTER_MASK_DILATION", "4")),
         propainter_fp16=os.environ.get("ENGINE_PROPAINTER_FP16", "1").lower() not in {"0", "false", "no"},
         propainter_use_crops=os.environ.get("ENGINE_PROPAINTER_USE_CROPS", "1").lower() not in {"0", "false", "no"},
-        propainter_crop_padding=int(os.environ.get("ENGINE_PROPAINTER_CROP_PADDING", "80")),
-        propainter_crop_merge_gap=int(os.environ.get("ENGINE_PROPAINTER_CROP_GAP", "48")),
-        propainter_crop_max_width=int(os.environ.get("ENGINE_PROPAINTER_CROP_MAX_WIDTH", "896")),
-        propainter_crop_max_height=int(os.environ.get("ENGINE_PROPAINTER_CROP_MAX_HEIGHT", "384")),
+        propainter_crop_padding=int(os.environ.get("ENGINE_PROPAINTER_CROP_PADDING", "64")),
+        propainter_crop_merge_gap=int(os.environ.get("ENGINE_PROPAINTER_CROP_GAP", "64")),
+        propainter_crop_max_width=int(os.environ.get("ENGINE_PROPAINTER_CROP_MAX_WIDTH", "1120")),
+        propainter_crop_max_height=int(os.environ.get("ENGINE_PROPAINTER_CROP_MAX_HEIGHT", "640")),
         temporal_mask_samples=int(os.environ.get("ENGINE_PROPAINTER_TEMPORAL_MASK_SAMPLES", "0")),
         temporal_mask_min_hits=int(os.environ.get("ENGINE_PROPAINTER_TEMPORAL_MASK_MIN_HITS", "2")),
     ),
