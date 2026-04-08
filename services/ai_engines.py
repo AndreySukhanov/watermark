@@ -22,6 +22,7 @@ class AIEngineConfig:
     output_quality: int = 99
     mask_shape: str = "auto"
     segmenter_threshold: float = 0.45
+    segmenter_weights: str = "segmenter.pth"
     propainter_width: int = 960
     propainter_height: int = 540
     propainter_subvideo_length: int = 30
@@ -44,6 +45,7 @@ class AIEngineConfig:
             "refine_mask": data["refine_mask"],
             "mask_shape": data["mask_shape"],
             "segmenter_threshold": data["segmenter_threshold"],
+            "segmenter_weights": data["segmenter_weights"],
             "temporal_mask_samples": data["temporal_mask_samples"],
         }
 
@@ -66,6 +68,7 @@ AI_ENGINES: dict[str, AIEngineConfig] = {
         output_quality=int(os.environ.get("ENGINE_LAMA_FAST_JPEG_QUALITY", "99")),
         mask_shape=os.environ.get("ENGINE_LAMA_FAST_MASK_SHAPE", "auto"),
         segmenter_threshold=float(os.environ.get("ENGINE_LAMA_FAST_SEGMENTER_THRESHOLD", "0.45")),
+        segmenter_weights=os.environ.get("ENGINE_LAMA_FAST_SEGMENTER_WEIGHTS", "segmenter.pth"),
     ),
     "propainter_quality": AIEngineConfig(
         key="propainter_quality",
@@ -83,6 +86,7 @@ AI_ENGINES: dict[str, AIEngineConfig] = {
         resize_limit=int(os.environ.get("ENGINE_PROPAINTER_RESIZE", "960")),
         mask_shape=os.environ.get("ENGINE_PROPAINTER_MASK_SHAPE", "auto"),
         segmenter_threshold=float(os.environ.get("ENGINE_PROPAINTER_SEGMENTER_THRESHOLD", "0.45")),
+        segmenter_weights=os.environ.get("ENGINE_PROPAINTER_SEGMENTER_WEIGHTS", "segmenter.pth"),
         propainter_width=int(os.environ.get("ENGINE_PROPAINTER_WIDTH", "960")),
         propainter_height=int(os.environ.get("ENGINE_PROPAINTER_HEIGHT", "540")),
         propainter_subvideo_length=int(os.environ.get("ENGINE_PROPAINTER_SUBVIDEO", "30")),
@@ -122,6 +126,7 @@ _STR_OVERRIDE_KEYS = {
     "hd_strategy": {"Original", "Resize", "Crop"},
     "output_suffix": {".jpg", ".jpeg", ".png"},
     "mask_shape": {"auto", "hf_segmenter", "hybrid_segmenter"},
+    "segmenter_weights": {"segmenter.pth", "segmenter_universal.pth"},
 }
 
 
