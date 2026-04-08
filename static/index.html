@@ -109,6 +109,15 @@
               <div class="regions-empty">Загрузка профилей AI…</div>
             </div>
             <div class="engine-meta" id="engine-meta">—</div>
+            <div class="quality-mask-row" id="quality-mask-row" style="display:none">
+              <div class="label-inline">Quality Mask</div>
+              <select id="quality-mask-shape" onchange="setQualityMaskProfile(this.value)">
+                <option value="hybrid_segmenter">Hybrid + Universal HF</option>
+                <option value="hf_segmenter">HF Universal</option>
+                <option value="auto">Glyph / Auto</option>
+              </select>
+              <div class="quality-mask-meta" id="quality-mask-meta">—</div>
+            </div>
           </div>
           <div id="device-row" style="display:none; margin-top:8px">
             <div class="mode-row">

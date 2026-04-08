@@ -16,6 +16,7 @@ const state = {
   pendingUploads: new Map(),
   engine: 'lama_fast',
   engines: [],
+  qualityMaskProfile: 'hybrid_segmenter',
   qualityAnalysis: null,
 };
 
@@ -59,6 +60,32 @@ const FALLBACK_AI_ENGINES = [
     refine_mask: true,
   },
 ];
+
+const QUALITY_MASK_PRESETS = {
+  auto: {
+    label: 'Glyph / Auto',
+    hint: 'Текущий glyph-based refined mask без HF-сегментации.',
+    options: {},
+  },
+  hf_segmenter: {
+    label: 'HF Universal',
+    hint: 'Прямая HF-сегментация universal-весами для полупрозрачного текста.',
+    options: {
+      mask_shape: 'hf_segmenter',
+      segmenter_weights: 'segmenter_universal.pth',
+      segmenter_threshold: 0.45,
+    },
+  },
+  hybrid_segmenter: {
+    label: 'Hybrid + Universal HF',
+    hint: 'Рекомендуемый quality path: glyph-mask + HF universal, с ограничением по регионам.',
+    options: {
+      mask_shape: 'hybrid_segmenter',
+      segmenter_weights: 'segmenter_universal.pth',
+      segmenter_threshold: 0.42,
+    },
+  },
+};
 
 function fileKey(file) {
   return `${file.name}:${file.size}:${file.lastModified}`;
@@ -330,6 +357,38 @@ function getSelectedEngine() {
   return state.engines.find(engine => engine.key === state.engine) || state.engines[0] || FALLBACK_AI_ENGINES[0];
 }
 
+function getSelectedQualityMaskProfile() {
+  return QUALITY_MASK_PRESETS[state.qualityMaskProfile] || QUALITY_MASK_PRESETS.hybrid_segmenter;
+}
+
+function formatMaskShapeLabel(maskShape) {
+  if (maskShape === 'hybrid_segmenter') return 'Hybrid + Universal HF';
+  if (maskShape === 'hf_segmenter') return 'HF Universal';
+  return 'Glyph / Auto';
+}
+
+function getEngineOptions() {
+  const engine = getSelectedEngine();
+  if (!engine || engine.family !== 'propainter') return {};
+  return { ...getSelectedQualityMaskProfile().options };
+}
+
+function renderQualityMaskControls() {
+  const row = document.getElementById('quality-mask-row');
+  const select = document.getElementById('quality-mask-shape');
+  const meta = document.getElementById('quality-mask-meta');
+  const engine = getSelectedEngine();
+  const visible = mode === 'ai' && engine?.family === 'propainter';
+  row.style.display = visible ? '' : 'none';
+  if (!visible) return;
+
+  if (!QUALITY_MASK_PRESETS[state.qualityMaskProfile]) {
+    state.qualityMaskProfile = 'hybrid_segmenter';
+  }
+  select.value = state.qualityMaskProfile;
+  meta.textContent = getSelectedQualityMaskProfile().hint;
+}
+
 function renderEngineList() {
   const el = document.getElementById('engine-list');
   if (!state.engines.length) {
@@ -353,9 +412,11 @@ function updateAiModeMeta() {
   const deviceRow = document.getElementById('device-row');
   const meta = document.getElementById('engine-meta');
   const engine = getSelectedEngine();
+  const maskProfile = getSelectedQualityMaskProfile();
 
   engineRow.style.display = mode === 'ai' ? '' : 'none';
   warning.style.display = mode === 'ai' ? '' : 'none';
+  renderQualityMaskControls();
 
   if (mode !== 'ai') {
     deviceRow.style.display = 'none';
@@ -370,7 +431,9 @@ function updateAiModeMeta() {
 
   const estimate = state.duration > 0 ? formatDurationLabel(state.duration * engine.estimate_multiplier) : null;
   const skipPart = engine.skip > 1 ? `Skip ${engine.skip}` : 'Без skip';
-  const refinePart = engine.refine_mask ? 'refined mask' : 'простая mask';
+  const refinePart = engine.family === 'propainter'
+    ? maskProfile.label
+    : (engine.refine_mask ? 'refined mask' : 'простая mask');
   warning.textContent = estimate
     ? `${engine.label}: ориентир ~${estimate} · ${skipPart} · ${refinePart}.`
     : `${engine.label}: ${engine.description}`;
@@ -381,6 +444,14 @@ function setEngine(key) {
   state.engine = key;
   invalidateQualityAnalysis();
   renderEngineList();
+  updateAiModeMeta();
+}
+
+function setQualityMaskProfile(value) {
+  if (!QUALITY_MASK_PRESETS[value]) value = 'hybrid_segmenter';
+  state.qualityMaskProfile = value;
+  invalidateQualityAnalysis();
+  renderQualityMaskControls();
   updateAiModeMeta();
 }
 
@@ -397,6 +468,7 @@ async function loadAiEngines() {
   }
   renderEngineList();
   updateAiModeMeta();
+  renderQualityMaskControls();
 }
 
 function renderQualityAnalysis() {
@@ -414,10 +486,11 @@ function renderQualityAnalysis() {
   const data = state.qualityAnalysis;
   const coverage = typeof data.mask_coverage === 'number' ? data.mask_coverage.toFixed(3) : '0.000';
   const bbox = data.mask_bbox || {};
+  const maskShape = formatMaskShapeLabel(data.engine?.mask_shape || 'auto');
   meta.textContent =
     `Engine: ${data.engine?.label || state.engine} · reference ${data.reference_time}s · ` +
     `регионов ${data.merged_region_count} · автонайдено ${data.suggested_region_count} · ` +
-    `mask ${coverage}% · bbox ${bbox.w || 0}×${bbox.h || 0}`;
+    `mask ${coverage}% · ${maskShape} · bbox ${bbox.w || 0}×${bbox.h || 0}`;
   ref.src = data.reference_url + `?_=${Date.now()}`;
   mask.src = data.mask_preview_url + `?_=${Date.now()}`;
   grid.style.display = '';
@@ -440,6 +513,7 @@ async function analyzeQuality(autodetect = false) {
 
   const btnAnalyze = document.getElementById('btn-quality-analyze');
   const btnDetect = document.getElementById('btn-quality-detect');
+  const engineOptions = getEngineOptions();
   btnAnalyze.disabled = true;
   btnDetect.disabled = true;
 
@@ -454,6 +528,7 @@ async function analyzeQuality(autodetect = false) {
         height: state.height,
         regions,
         engine: state.engine,
+        engine_options: engineOptions,
         autodetect,
       }),
     });
@@ -649,6 +724,7 @@ function startProcessing() {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const ws = new WebSocket(`${proto}//${window.location.host}/ws/process`);
   state.ws = ws;
+  const engineOptions = getEngineOptions();
 
   ws.onopen = () => {
     ws.send(JSON.stringify({
@@ -661,6 +737,7 @@ function startProcessing() {
       mode,
       device,
       engine: state.engine,
+      engine_options: engineOptions,
     }));
   };
 
@@ -774,6 +851,7 @@ async function addToQueue() {
     mode,
     device,
     engine:   state.engine,
+    engine_options: getEngineOptions(),
   };
   const res = await fetch('/api/queue', {
     method: 'POST',
@@ -815,6 +893,7 @@ async function addAllToQueue() {
       mode,
       device,
       engine:   state.engine,
+      engine_options: getEngineOptions(),
     };
     
     try {
