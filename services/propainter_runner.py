@@ -3,12 +3,20 @@ import re
 import shutil
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from PIL import Image, ImageFilter
+
 from services.ai_engines import AIEngineConfig
-from services.iopaint_runner import extract_reference_frame, generate_mask, generate_temporal_mask
-from services.watermark_segmenter import generate_hf_segmenter_mask, generate_hybrid_segmenter_mask
+from services.iopaint_runner import (
+    extract_reference_frame,
+    generate_mask,
+    generate_temporal_mask,
+    reassemble_video,
+)
 from services.video_info import get_video_info
+from services.watermark_segmenter import generate_hf_segmenter_mask, generate_hybrid_segmenter_mask
 
 PROPAINTER_DIR = Path(os.environ.get("PROPAINTER_DIR", "/workspace/ProPainter"))
 PROPAINTER_PYTHON = os.environ.get("PROPAINTER_PYTHON", "python3")
@@ -71,29 +79,391 @@ def ensure_propainter_available(propainter_dir: Path | None = None):
     return repo_dir
 
 
-def run_propainter_pipeline(
-    input_video,
-    regions,
-    output_path,
-    work_dir,
+def _clamp_box(box, width: int, height: int) -> tuple[int, int, int, int]:
+    x0, y0, x1, y1 = box
+    return (
+        max(0, min(width, int(x0))),
+        max(0, min(height, int(y0))),
+        max(0, min(width, int(x1))),
+        max(0, min(height, int(y1))),
+    )
+
+
+def _box_size(box) -> tuple[int, int]:
+    return max(0, int(box[2] - box[0])), max(0, int(box[3] - box[1]))
+
+
+def _box_area(box) -> int:
+    width, height = _box_size(box)
+    return width * height
+
+
+def _union_box(left, right) -> tuple[int, int, int, int]:
+    return (
+        min(left[0], right[0]),
+        min(left[1], right[1]),
+        max(left[2], right[2]),
+        max(left[3], right[3]),
+    )
+
+
+def _boxes_close(left, right, gap: int) -> bool:
+    return not (
+        left[2] + gap < right[0]
+        or right[2] + gap < left[0]
+        or left[3] + gap < right[1]
+        or right[3] + gap < left[1]
+    )
+
+
+def _region_to_crop_box(region: dict, width: int, height: int, padding: int) -> tuple[int, int, int, int]:
+    return _clamp_box(
+        (
+            int(region["x"]) - padding,
+            int(region["y"]) - padding,
+            int(region["x"]) + int(region["w"]) + padding,
+            int(region["y"]) + int(region["h"]) + padding,
+        ),
+        width,
+        height,
+    )
+
+
+def plan_propainter_crop_groups(width: int, height: int, regions: list[dict], engine_config: AIEngineConfig) -> list[dict]:
+    if not regions:
+        return []
+
+    max_width = max(64, int(engine_config.propainter_crop_max_width))
+    max_height = max(64, int(engine_config.propainter_crop_max_height))
+    padding = max(0, int(engine_config.propainter_crop_padding))
+    merge_gap = max(0, int(engine_config.propainter_crop_merge_gap))
+    ordered_regions = sorted(regions, key=lambda item: (int(item["y"]), int(item["x"])))
+
+    groups: list[dict] = []
+    for region in ordered_regions:
+        region_box = _region_to_crop_box(region, width, height, padding)
+        best_idx = None
+        best_union = None
+        best_added_area = None
+
+        for idx, group in enumerate(groups):
+            if not _boxes_close(group["box"], region_box, merge_gap):
+                continue
+            union_box = _union_box(group["box"], region_box)
+            union_width, union_height = _box_size(union_box)
+            if union_width > max_width or union_height > max_height:
+                continue
+            added_area = _box_area(union_box) - _box_area(group["box"])
+            if best_added_area is None or added_area < best_added_area:
+                best_idx = idx
+                best_union = union_box
+                best_added_area = added_area
+
+        if best_idx is None:
+            groups.append({"box": region_box, "regions": [dict(region)]})
+        else:
+            groups[best_idx]["box"] = best_union
+            groups[best_idx]["regions"].append(dict(region))
+
+    result = []
+    for idx, group in enumerate(sorted(groups, key=lambda item: (item["box"][1], item["box"][0])), start=1):
+        x0, y0, x1, y1 = group["box"]
+        result.append(
+            {
+                "index": idx,
+                "box": (x0, y0, x1, y1),
+                "x": x0,
+                "y": y0,
+                "w": x1 - x0,
+                "h": y1 - y0,
+                "regions": group["regions"],
+                "region_count": len(group["regions"]),
+            }
+        )
+    return result
+
+
+def _translate_regions(regions: list[dict], box) -> list[dict]:
+    x0, y0, _, _ = box
+    return [
+        {
+            "x": int(region["x"]) - x0,
+            "y": int(region["y"]) - y0,
+            "w": int(region["w"]),
+            "h": int(region["h"]),
+        }
+        for region in regions
+    ]
+
+
+def _ensure_clean_dir(path: Path):
+    shutil.rmtree(path, ignore_errors=True)
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def _build_mask(
+    *,
+    reference_frame_path: Path,
+    mask_path: Path,
+    width: int,
+    height: int,
+    regions: list[dict],
+    engine_config: AIEngineConfig,
+    emit_log,
+    input_video: Path | None = None,
+    duration: float | None = None,
+    work_dir: Path | None = None,
+    register_process=None,
+):
+    if engine_config.mask_shape == "hybrid_segmenter":
+        emit_log("ProPainter: hybrid segmenter mask")
+        generate_hybrid_segmenter_mask(
+            reference_frame_path,
+            mask_path,
+            width=width,
+            height=height,
+            regions=regions,
+            padding=engine_config.mask_padding,
+            dilate=engine_config.mask_dilate,
+            threshold=engine_config.segmenter_threshold,
+            weights_name=engine_config.segmenter_weights,
+        )
+        return
+
+    if engine_config.mask_shape == "hf_segmenter":
+        emit_log("ProPainter: HF segmenter mask")
+        generate_hf_segmenter_mask(
+            reference_frame_path,
+            mask_path,
+            width=width,
+            height=height,
+            regions=regions,
+            padding=engine_config.mask_padding,
+            dilate=engine_config.mask_dilate,
+            threshold=engine_config.segmenter_threshold,
+            weights_name=engine_config.segmenter_weights,
+        )
+        return
+
+    if (
+        engine_config.temporal_mask_samples > 1
+        and input_video is not None
+        and duration is not None
+        and work_dir is not None
+    ):
+        emit_log(
+            "ProPainter: temporal mask "
+            f"samples={engine_config.temporal_mask_samples} min_hits={engine_config.temporal_mask_min_hits}"
+        )
+        generate_temporal_mask(
+            input_video,
+            width,
+            height,
+            duration,
+            regions,
+            mask_path,
+            work_dir=work_dir,
+            padding=engine_config.mask_padding,
+            dilate=engine_config.mask_dilate,
+            samples=engine_config.temporal_mask_samples,
+            min_hits=engine_config.temporal_mask_min_hits,
+            register_process=register_process,
+        )
+        return
+
+    emit_log("ProPainter: glyph/region mask")
+    generate_mask(
+        width,
+        height,
+        regions,
+        mask_path,
+        padding=engine_config.mask_padding,
+        dilate=engine_config.mask_dilate,
+        reference_frame_path=reference_frame_path if engine_config.refine_mask else None,
+    )
+
+
+def _fit_propainter_size(width: int, height: int, max_width: int, max_height: int) -> tuple[int, int]:
+    width = max(32, int(width))
+    height = max(32, int(height))
+    max_width = max(64, int(max_width))
+    max_height = max(64, int(max_height))
+
+    scale = min(max_width / width, max_height / height)
+    target_width = max(64, int(round(width * scale)))
+    target_height = max(64, int(round(height * scale)))
+    target_width = min(max_width, max(64, (target_width // 8) * 8 or 64))
+    target_height = min(max_height, max(64, (target_height // 8) * 8 or 64))
+    return target_width, target_height
+
+
+def _extract_full_frames(input_video: Path, frames_dir: Path, register_process=None, is_cancelled=None):
+    _ensure_clean_dir(frames_dir)
+    _run_streaming_command(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(input_video),
+            str(frames_dir / "%06d.png"),
+        ],
+        register_process=register_process,
+        is_cancelled=is_cancelled,
+    )
+
+
+def _crop_frame_sequence(source_frames_dir: Path, crop_box, out_dir: Path):
+    _ensure_clean_dir(out_dir)
+    x0, y0, x1, y1 = crop_box
+    frame_paths = sorted(source_frames_dir.glob("*.png"))
+
+    def _crop_one(frame_path: Path):
+        with Image.open(frame_path) as frame_image:
+            crop = frame_image.convert("RGB").crop((x0, y0, x1, y1))
+            crop.save(out_dir / frame_path.name)
+
+    worker_count = min(8, max(1, os.cpu_count() or 4))
+    with ThreadPoolExecutor(max_workers=worker_count) as pool:
+        list(pool.map(_crop_one, frame_paths))
+
+
+def _extract_video_frames(input_video: Path, frames_dir: Path, register_process=None, is_cancelled=None):
+    _ensure_clean_dir(frames_dir)
+    _run_streaming_command(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(input_video),
+            str(frames_dir / "%06d.png"),
+        ],
+        register_process=register_process,
+        is_cancelled=is_cancelled,
+    )
+
+
+def _run_propainter_inference(
+    *,
+    propainter_dir: Path,
+    frames_dir: Path,
+    mask_path: Path,
+    output_root: Path,
+    save_fps: int,
+    target_width: int,
+    target_height: int,
+    engine_config: AIEngineConfig,
+    register_process=None,
+    is_cancelled=None,
+    emit_log=None,
+    emit_progress=None,
+    progress_span=None,
+) -> Path:
+    output_root.mkdir(parents=True, exist_ok=True)
+    infer_cmd = [
+        PROPAINTER_PYTHON,
+        "inference_propainter.py",
+        "--video",
+        str(frames_dir),
+        "--mask",
+        str(mask_path),
+        "--output",
+        str(output_root),
+        "--save_fps",
+        str(save_fps),
+        "--width",
+        str(target_width),
+        "--height",
+        str(target_height),
+        "--subvideo_length",
+        str(engine_config.propainter_subvideo_length),
+        "--neighbor_length",
+        str(engine_config.propainter_neighbor_length),
+        "--ref_stride",
+        str(engine_config.propainter_ref_stride),
+        "--mask_dilation",
+        str(engine_config.propainter_mask_dilation),
+    ]
+    if engine_config.propainter_fp16:
+        infer_cmd.append("--fp16")
+
+    emit_log(
+        "ProPainter: inference "
+        f"{target_width}x{target_height} subvideo={engine_config.propainter_subvideo_length}"
+    )
+    _run_streaming_command(
+        infer_cmd,
+        cwd=propainter_dir,
+        register_process=register_process,
+        is_cancelled=is_cancelled,
+        emit_log=emit_log,
+        emit_progress=emit_progress,
+        progress_span=progress_span,
+    )
+    output_video = output_root / frames_dir.name / "inpaint_out.mp4"
+    if not output_video.exists():
+        raise RuntimeError(f"Не найден результат ProPainter: {output_video}")
+    return output_video
+
+
+def _compose_crop_group(
+    *,
+    source_frames_dir: Path,
+    composed_frames_dir: Path,
+    processed_frames_dir: Path,
+    mask_path: Path,
+    crop_box,
+    feather_radius: int,
+):
+    x0, y0, x1, y1 = crop_box
+    crop_width = x1 - x0
+    crop_height = y1 - y0
+    if crop_width <= 0 or crop_height <= 0:
+        return
+
+    with Image.open(mask_path) as mask_image:
+        mask = mask_image.convert("L")
+        blend_mask = (
+            mask.filter(ImageFilter.GaussianBlur(feather_radius))
+            if feather_radius > 0
+            else mask
+        )
+        blend_mask = blend_mask.copy()
+
+    processed_frames = sorted(processed_frames_dir.glob("*.png"))
+
+    def _compose_one(processed_path: Path):
+        target_path = composed_frames_dir / processed_path.name
+        base_path = target_path if target_path.exists() else source_frames_dir / processed_path.name
+        with Image.open(base_path) as base_image, Image.open(processed_path) as processed_image:
+            base = base_image.convert("RGB")
+            processed = processed_image.convert("RGB")
+            if processed.size != (crop_width, crop_height):
+                processed = processed.resize((crop_width, crop_height), Image.Resampling.BICUBIC)
+            original_crop = base.crop((x0, y0, x1, y1))
+            composed_crop = Image.composite(processed, original_crop, blend_mask)
+            base.paste(composed_crop, (x0, y0))
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            base.save(target_path)
+
+    worker_count = min(8, max(1, os.cpu_count() or 4))
+    with ThreadPoolExecutor(max_workers=worker_count) as pool:
+        list(pool.map(_compose_one, processed_frames))
+
+
+def _run_propainter_full_frame_pipeline(
+    *,
+    input_video: Path,
+    output_path: Path,
+    work_dir: Path,
+    info,
+    regions: list[dict],
     engine_config: AIEngineConfig,
     emit_log,
     emit_progress,
     register_process=None,
     is_cancelled=None,
 ):
-    input_video = Path(input_video)
-    output_path = Path(output_path)
-    work_dir = Path(work_dir)
-    shutil.rmtree(work_dir, ignore_errors=True)
-    work_dir.mkdir(parents=True, exist_ok=True)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
     propainter_dir = ensure_propainter_available()
-    info = get_video_info(str(input_video))
-    if info is None:
-        raise RuntimeError(f"Не удалось прочитать видео: {input_video}")
-
     reference_time = min(5.0, max(0.0, info.duration * 0.25))
     reference_frame_path = work_dir / "reference.jpg"
     mask_path = work_dir / "mask.png"
@@ -109,72 +479,25 @@ def run_propainter_pipeline(
         time_sec=reference_time,
         register_process=register_process,
     )
-    if engine_config.mask_shape == "hybrid_segmenter":
-        emit_log("ProPainter: hybrid segmenter mask")
-        generate_hybrid_segmenter_mask(
-            reference_frame_path,
-            mask_path,
-            width=info.width,
-            height=info.height,
-            regions=regions,
-            padding=engine_config.mask_padding,
-            dilate=engine_config.mask_dilate,
-            threshold=engine_config.segmenter_threshold,
-            weights_name=engine_config.segmenter_weights,
-        )
-    elif engine_config.mask_shape == "hf_segmenter":
-        emit_log("ProPainter: HF segmenter mask")
-        generate_hf_segmenter_mask(
-            reference_frame_path,
-            mask_path,
-            width=info.width,
-            height=info.height,
-            regions=regions,
-            padding=engine_config.mask_padding,
-            dilate=engine_config.mask_dilate,
-            threshold=engine_config.segmenter_threshold,
-            weights_name=engine_config.segmenter_weights,
-        )
-    elif engine_config.temporal_mask_samples > 1:
-        emit_log(
-            "ProPainter: temporal mask "
-            f"samples={engine_config.temporal_mask_samples} min_hits={engine_config.temporal_mask_min_hits}"
-        )
-        generate_temporal_mask(
-            input_video,
-            info.width,
-            info.height,
-            info.duration,
-            regions,
-            mask_path,
-            work_dir=work_dir,
-            padding=engine_config.mask_padding,
-            dilate=engine_config.mask_dilate,
-            samples=engine_config.temporal_mask_samples,
-            min_hits=engine_config.temporal_mask_min_hits,
-            register_process=register_process,
-        )
-    else:
-        generate_mask(
-            info.width,
-            info.height,
-            regions,
-            mask_path,
-            padding=engine_config.mask_padding,
-            dilate=engine_config.mask_dilate,
-            reference_frame_path=reference_frame_path if engine_config.refine_mask else None,
-        )
+    _build_mask(
+        reference_frame_path=reference_frame_path,
+        mask_path=mask_path,
+        width=info.width,
+        height=info.height,
+        regions=regions,
+        engine_config=engine_config,
+        emit_log=emit_log,
+        input_video=input_video,
+        duration=info.duration,
+        work_dir=work_dir,
+        register_process=register_process,
+    )
 
     emit_log("ProPainter: извлечение исходных кадров...")
     extract_started = time.perf_counter()
-    _run_streaming_command(
-        [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(input_video),
-            str(frames_dir / "%06d.png"),
-        ],
+    _extract_full_frames(
+        input_video,
+        frames_dir,
         register_process=register_process,
         is_cancelled=is_cancelled,
     )
@@ -182,43 +505,16 @@ def run_propainter_pipeline(
     emit_progress(16)
 
     save_fps = max(1, int(round(info.fps or 25.0)))
-    output_root.mkdir(parents=True, exist_ok=True)
-    infer_cmd = [
-        PROPAINTER_PYTHON,
-        "inference_propainter.py",
-        "--video",
-        str(frames_dir),
-        "--mask",
-        str(mask_path),
-        "--output",
-        str(output_root),
-        "--save_fps",
-        str(save_fps),
-        "--width",
-        str(engine_config.propainter_width),
-        "--height",
-        str(engine_config.propainter_height),
-        "--subvideo_length",
-        str(engine_config.propainter_subvideo_length),
-        "--neighbor_length",
-        str(engine_config.propainter_neighbor_length),
-        "--ref_stride",
-        str(engine_config.propainter_ref_stride),
-        "--mask_dilation",
-        str(engine_config.propainter_mask_dilation),
-    ]
-    if engine_config.propainter_fp16:
-        infer_cmd.append("--fp16")
-
-    emit_log(
-        "ProPainter: inference "
-        f"{engine_config.propainter_width}x{engine_config.propainter_height} "
-        f"subvideo={engine_config.propainter_subvideo_length}"
-    )
     infer_started = time.perf_counter()
-    _run_streaming_command(
-        infer_cmd,
-        cwd=propainter_dir,
+    propainter_video = _run_propainter_inference(
+        propainter_dir=propainter_dir,
+        frames_dir=frames_dir,
+        mask_path=mask_path,
+        output_root=output_root,
+        save_fps=save_fps,
+        target_width=engine_config.propainter_width,
+        target_height=engine_config.propainter_height,
+        engine_config=engine_config,
         register_process=register_process,
         is_cancelled=is_cancelled,
         emit_log=emit_log,
@@ -226,10 +522,6 @@ def run_propainter_pipeline(
         progress_span=(20, 88),
     )
     emit_log(f"  Inference: {time.perf_counter() - infer_started:.1f}s")
-
-    propainter_video = output_root / frames_dir.name / "inpaint_out.mp4"
-    if not propainter_video.exists():
-        raise RuntimeError(f"Не найден результат ProPainter: {propainter_video}")
 
     emit_log("ProPainter: upscale + audio mux...")
     emit_progress(92)
@@ -265,3 +557,201 @@ def run_propainter_pipeline(
     )
     emit_log(f"  Mux/upscale: {time.perf_counter() - mux_started:.1f}s")
     emit_progress(99)
+
+
+def _run_propainter_crop_pipeline(
+    *,
+    input_video: Path,
+    output_path: Path,
+    work_dir: Path,
+    info,
+    regions: list[dict],
+    engine_config: AIEngineConfig,
+    emit_log,
+    emit_progress,
+    register_process=None,
+    is_cancelled=None,
+):
+    propainter_dir = ensure_propainter_available()
+    reference_time = min(5.0, max(0.0, info.duration * 0.25))
+    reference_frame_path = work_dir / "reference.jpg"
+    source_frames_dir = work_dir / "source_frames"
+    composed_frames_dir = work_dir / "composed_frames"
+    crop_groups = plan_propainter_crop_groups(info.width, info.height, regions, engine_config)
+    if not crop_groups:
+        raise RuntimeError("Не удалось построить crop-группы для ProPainter")
+
+    emit_log(f"ProPainter crop: reference frame {reference_time:.1f}s")
+    emit_progress(4)
+    extract_reference_frame(
+        input_video,
+        reference_frame_path,
+        time_sec=reference_time,
+        register_process=register_process,
+    )
+    emit_log(f"ProPainter crop groups: {len(crop_groups)}")
+    for group in crop_groups:
+        emit_log(
+            f"  Crop {group['index']}: {group['region_count']} regions, "
+            f"{group['w']}x{group['h']}"
+        )
+
+    emit_log("ProPainter: извлечение исходных кадров...")
+    extract_started = time.perf_counter()
+    _extract_full_frames(
+        input_video,
+        source_frames_dir,
+        register_process=register_process,
+        is_cancelled=is_cancelled,
+    )
+    emit_log(f"  Extract frames: {time.perf_counter() - extract_started:.1f}s")
+    emit_progress(16)
+
+    save_fps = max(1, int(round(info.fps or 25.0)))
+    for index, group in enumerate(crop_groups, start=1):
+        if is_cancelled and is_cancelled():
+            raise RuntimeError("Отменено пользователем")
+
+        x0, y0, x1, y1 = group["box"]
+        crop_width = x1 - x0
+        crop_height = y1 - y0
+        group_dir = work_dir / f"crop_{index:02d}"
+        crop_reference_path = group_dir / "reference.jpg"
+        crop_mask_path = group_dir / "mask.png"
+        crop_frames_dir = group_dir / "frames"
+        crop_output_root = group_dir / "propainter_output"
+        crop_processed_dir = group_dir / "processed_frames"
+
+        group_dir.mkdir(parents=True, exist_ok=True)
+        with Image.open(reference_frame_path) as reference_image:
+            reference_image.convert("RGB").crop((x0, y0, x1, y1)).save(crop_reference_path)
+
+        translated_regions = _translate_regions(group["regions"], group["box"])
+        emit_log(
+            f"ProPainter crop {index}/{len(crop_groups)}: mask "
+            f"{crop_width}x{crop_height}"
+        )
+        _build_mask(
+            reference_frame_path=crop_reference_path,
+            mask_path=crop_mask_path,
+            width=crop_width,
+            height=crop_height,
+            regions=translated_regions,
+            engine_config=engine_config,
+            emit_log=emit_log,
+        )
+
+        emit_log(f"ProPainter crop {index}/{len(crop_groups)}: кадры...")
+        crop_extract_started = time.perf_counter()
+        _crop_frame_sequence(source_frames_dir, group["box"], crop_frames_dir)
+        emit_log(f"  Crop extract: {time.perf_counter() - crop_extract_started:.1f}s")
+
+        target_width, target_height = _fit_propainter_size(
+            crop_width,
+            crop_height,
+            engine_config.propainter_width,
+            engine_config.propainter_height,
+        )
+        group_start = 20 + int((68 * (index - 1)) / len(crop_groups))
+        group_end = 20 + int((68 * index) / len(crop_groups))
+        infer_started = time.perf_counter()
+        propainter_video = _run_propainter_inference(
+            propainter_dir=propainter_dir,
+            frames_dir=crop_frames_dir,
+            mask_path=crop_mask_path,
+            output_root=crop_output_root,
+            save_fps=save_fps,
+            target_width=target_width,
+            target_height=target_height,
+            engine_config=engine_config,
+            register_process=register_process,
+            is_cancelled=is_cancelled,
+            emit_log=emit_log,
+            emit_progress=emit_progress,
+            progress_span=(group_start, max(group_start, group_end - 2)),
+        )
+        emit_log(f"  Crop inference: {time.perf_counter() - infer_started:.1f}s")
+
+        emit_log(f"ProPainter crop {index}/{len(crop_groups)}: извлечение результата...")
+        _extract_video_frames(
+            propainter_video,
+            crop_processed_dir,
+            register_process=register_process,
+            is_cancelled=is_cancelled,
+        )
+
+        emit_log(f"ProPainter crop {index}/{len(crop_groups)}: композиция...")
+        compose_started = time.perf_counter()
+        _compose_crop_group(
+            source_frames_dir=source_frames_dir,
+            composed_frames_dir=composed_frames_dir,
+            processed_frames_dir=crop_processed_dir,
+            mask_path=crop_mask_path,
+            crop_box=group["box"],
+            feather_radius=engine_config.feather_radius,
+        )
+        emit_log(f"  Crop compose: {time.perf_counter() - compose_started:.1f}s")
+        emit_progress(group_end)
+
+    emit_log("ProPainter crop: сборка видео...")
+    emit_progress(92)
+    reassemble_started = time.perf_counter()
+    reassemble_video(
+        composed_frames_dir,
+        input_video,
+        output_path,
+        info.fps,
+        register_process=register_process,
+    )
+    emit_log(f"  Reassemble: {time.perf_counter() - reassemble_started:.1f}s")
+    emit_progress(99)
+
+
+def run_propainter_pipeline(
+    input_video,
+    regions,
+    output_path,
+    work_dir,
+    engine_config: AIEngineConfig,
+    emit_log,
+    emit_progress,
+    register_process=None,
+    is_cancelled=None,
+):
+    input_video = Path(input_video)
+    output_path = Path(output_path)
+    work_dir = Path(work_dir)
+    shutil.rmtree(work_dir, ignore_errors=True)
+    work_dir.mkdir(parents=True, exist_ok=True)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    info = get_video_info(str(input_video))
+    if info is None:
+        raise RuntimeError(f"Не удалось прочитать видео: {input_video}")
+
+    if engine_config.propainter_use_crops:
+        return _run_propainter_crop_pipeline(
+            input_video=input_video,
+            output_path=output_path,
+            work_dir=work_dir,
+            info=info,
+            regions=regions,
+            engine_config=engine_config,
+            emit_log=emit_log,
+            emit_progress=emit_progress,
+            register_process=register_process,
+            is_cancelled=is_cancelled,
+        )
+
+    return _run_propainter_full_frame_pipeline(
+        input_video=input_video,
+        output_path=output_path,
+        work_dir=work_dir,
+        info=info,
+        regions=regions,
+        engine_config=engine_config,
+        emit_log=emit_log,
+        emit_progress=emit_progress,
+        register_process=register_process,
+        is_cancelled=is_cancelled,
+    )

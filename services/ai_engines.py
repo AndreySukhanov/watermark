@@ -30,6 +30,11 @@ class AIEngineConfig:
     propainter_ref_stride: int = 10
     propainter_mask_dilation: int = 4
     propainter_fp16: bool = True
+    propainter_use_crops: bool = False
+    propainter_crop_padding: int = 80
+    propainter_crop_merge_gap: int = 48
+    propainter_crop_max_width: int = 896
+    propainter_crop_max_height: int = 384
     temporal_mask_samples: int = 0
     temporal_mask_min_hits: int = 2
 
@@ -46,6 +51,7 @@ class AIEngineConfig:
             "mask_shape": data["mask_shape"],
             "segmenter_threshold": data["segmenter_threshold"],
             "segmenter_weights": data["segmenter_weights"],
+            "propainter_use_crops": data["propainter_use_crops"],
             "temporal_mask_samples": data["temporal_mask_samples"],
         }
 
@@ -94,6 +100,11 @@ AI_ENGINES: dict[str, AIEngineConfig] = {
         propainter_ref_stride=int(os.environ.get("ENGINE_PROPAINTER_REF_STRIDE", "10")),
         propainter_mask_dilation=int(os.environ.get("ENGINE_PROPAINTER_MASK_DILATION", "4")),
         propainter_fp16=os.environ.get("ENGINE_PROPAINTER_FP16", "1").lower() not in {"0", "false", "no"},
+        propainter_use_crops=os.environ.get("ENGINE_PROPAINTER_USE_CROPS", "1").lower() not in {"0", "false", "no"},
+        propainter_crop_padding=int(os.environ.get("ENGINE_PROPAINTER_CROP_PADDING", "80")),
+        propainter_crop_merge_gap=int(os.environ.get("ENGINE_PROPAINTER_CROP_GAP", "48")),
+        propainter_crop_max_width=int(os.environ.get("ENGINE_PROPAINTER_CROP_MAX_WIDTH", "896")),
+        propainter_crop_max_height=int(os.environ.get("ENGINE_PROPAINTER_CROP_MAX_HEIGHT", "384")),
         temporal_mask_samples=int(os.environ.get("ENGINE_PROPAINTER_TEMPORAL_MASK_SAMPLES", "0")),
         temporal_mask_min_hits=int(os.environ.get("ENGINE_PROPAINTER_TEMPORAL_MASK_MIN_HITS", "2")),
     ),
@@ -115,13 +126,17 @@ _INT_OVERRIDE_LIMITS: dict[str, tuple[int, int]] = {
     "propainter_neighbor_length": (1, 60),
     "propainter_ref_stride": (1, 80),
     "propainter_mask_dilation": (0, 120),
+    "propainter_crop_padding": (0, 320),
+    "propainter_crop_merge_gap": (0, 320),
+    "propainter_crop_max_width": (128, 1920),
+    "propainter_crop_max_height": (64, 1080),
     "temporal_mask_samples": (0, 16),
     "temporal_mask_min_hits": (1, 16),
 }
 _FLOAT_OVERRIDE_LIMITS: dict[str, tuple[float, float]] = {
     "segmenter_threshold": (0.05, 0.95),
 }
-_BOOL_OVERRIDE_KEYS = {"refine_mask", "blend_skipped", "propainter_fp16"}
+_BOOL_OVERRIDE_KEYS = {"refine_mask", "blend_skipped", "propainter_fp16", "propainter_use_crops"}
 _STR_OVERRIDE_KEYS = {
     "hd_strategy": {"Original", "Resize", "Crop"},
     "output_suffix": {".jpg", ".jpeg", ".png"},
