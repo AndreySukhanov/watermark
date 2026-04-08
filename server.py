@@ -293,6 +293,7 @@ def _build_quality_analysis(body: dict) -> dict:
                 padding=config.mask_padding,
                 dilate=config.mask_dilate,
                 threshold=config.segmenter_threshold,
+                weights_name=config.segmenter_weights,
             )
         elif config.mask_shape == "hf_segmenter":
             generate_hf_segmenter_mask(
@@ -304,6 +305,7 @@ def _build_quality_analysis(body: dict) -> dict:
                 padding=config.mask_padding,
                 dilate=config.mask_dilate,
                 threshold=config.segmenter_threshold,
+                weights_name=config.segmenter_weights,
             )
         elif config.temporal_mask_samples > 1:
             generate_temporal_mask(
@@ -494,6 +496,7 @@ def _prepare_mask_assets(
             padding=config.mask_padding,
             dilate=config.mask_dilate,
             threshold=config.segmenter_threshold,
+            weights_name=config.segmenter_weights,
         )
     elif config.mask_shape == "hf_segmenter":
         generate_hf_segmenter_mask(
@@ -505,6 +508,7 @@ def _prepare_mask_assets(
             padding=config.mask_padding,
             dilate=config.mask_dilate,
             threshold=config.segmenter_threshold,
+            weights_name=config.segmenter_weights,
         )
     else:
         generate_mask(

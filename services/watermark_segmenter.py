@@ -4,7 +4,7 @@ from pathlib import Path
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 HF_WATERMARK_MODEL = "christophernavas/watermark-remover"
-HF_WATERMARK_WEIGHTS = "segmenter.pth"
+HF_WATERMARK_DEFAULT_WEIGHTS = "segmenter.pth"
 
 
 def _extract_state_dict(checkpoint):
@@ -22,8 +22,8 @@ def _extract_state_dict(checkpoint):
     }
 
 
-@lru_cache(maxsize=1)
-def _load_segmenter():
+@lru_cache(maxsize=4)
+def _load_segmenter(weights_name: str = HF_WATERMARK_DEFAULT_WEIGHTS):
     try:
         import torch
         import segmentation_models_pytorch as smp
@@ -42,7 +42,7 @@ def _load_segmenter():
         in_channels=3,
         classes=1,
     )
-    weights_path = hf_hub_download(HF_WATERMARK_MODEL, HF_WATERMARK_WEIGHTS)
+    weights_path = hf_hub_download(HF_WATERMARK_MODEL, weights_name)
     state = _extract_state_dict(torch.load(weights_path, map_location="cpu"))
     model.load_state_dict(state)
     model.to(device)
@@ -100,8 +100,12 @@ def _open_reference_image(reference_frame_path, width: int, height: int) -> Imag
     return image
 
 
-def _predict_probability_mask(image: Image.Image) -> Image.Image:
-    model, transform, torch, device = _load_segmenter()
+def _predict_probability_mask(
+    image: Image.Image,
+    *,
+    weights_name: str = HF_WATERMARK_DEFAULT_WEIGHTS,
+) -> Image.Image:
+    model, transform, torch, device = _load_segmenter(weights_name)
     tensor = transform(image).unsqueeze(0).to(device)
     with torch.no_grad():
         prediction = torch.sigmoid(model(tensor))[0, 0].detach().float().cpu().numpy()
@@ -156,13 +160,14 @@ def generate_hf_segmenter_mask(
     padding: int = 12,
     dilate: int = 4,
     threshold: float = 0.45,
+    weights_name: str = HF_WATERMARK_DEFAULT_WEIGHTS,
 ):
     reference_frame_path = Path(reference_frame_path)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     with _open_reference_image(reference_frame_path, width, height) as image:
-        probability_mask = _predict_probability_mask(image)
+        probability_mask = _predict_probability_mask(image, weights_name=weights_name)
         hard_mask = _threshold_mask(probability_mask, threshold)
         mask = Image.new("L", (width, height), 0)
 
@@ -190,6 +195,7 @@ def generate_hybrid_segmenter_mask(
     padding: int = 12,
     dilate: int = 4,
     threshold: float = 0.45,
+    weights_name: str = HF_WATERMARK_DEFAULT_WEIGHTS,
 ):
     from services.iopaint_runner import _refine_region_mask
 
@@ -198,7 +204,7 @@ def generate_hybrid_segmenter_mask(
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     with _open_reference_image(reference_frame_path, width, height) as image:
-        probability_mask = _predict_probability_mask(image)
+        probability_mask = _predict_probability_mask(image, weights_name=weights_name)
         hard_mask = _threshold_mask(probability_mask, threshold)
         soft_mask = _threshold_mask(probability_mask, max(0.12, threshold * 0.55))
         mask = Image.new("L", (width, height), 0)
