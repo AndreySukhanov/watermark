@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from services.ai_engines import AIEngineConfig
-from services.iopaint_runner import extract_reference_frame, generate_mask, generate_rotated_band_mask, generate_temporal_mask
+from services.iopaint_runner import extract_reference_frame, generate_mask, generate_temporal_mask
 from services.video_info import get_video_info
 
 PROPAINTER_DIR = Path(os.environ.get("PROPAINTER_DIR", "/workspace/ProPainter"))
@@ -96,7 +96,6 @@ def run_propainter_pipeline(
     reference_time = min(5.0, max(0.0, info.duration * 0.25))
     reference_frame_path = work_dir / "reference.jpg"
     mask_path = work_dir / "mask.png"
-    compose_mask_path = work_dir / "compose_mask.png"
     frames_dir = work_dir / "source_frames"
     output_root = work_dir / "propainter_output"
     frames_dir.mkdir(parents=True, exist_ok=True)
@@ -109,36 +108,7 @@ def run_propainter_pipeline(
         time_sec=reference_time,
         register_process=register_process,
     )
-    if engine_config.mask_shape == "wide_to_rotated_band":
-        emit_log("ProPainter: wide inference mask + rotated-band compose mask")
-        generate_mask(
-            info.width,
-            info.height,
-            regions,
-            mask_path,
-            padding=engine_config.mask_padding,
-            dilate=engine_config.mask_dilate,
-            reference_frame_path=None,
-        )
-        generate_rotated_band_mask(
-            info.width,
-            info.height,
-            regions,
-            compose_mask_path,
-            padding=0,
-            dilate=max(1, min(engine_config.mask_dilate, 3)),
-        )
-    elif engine_config.mask_shape == "rotated_band":
-        emit_log("ProPainter: rotated band mask")
-        generate_rotated_band_mask(
-            info.width,
-            info.height,
-            regions,
-            mask_path,
-            padding=engine_config.mask_padding,
-            dilate=engine_config.mask_dilate,
-        )
-    elif engine_config.temporal_mask_samples > 1:
+    if engine_config.temporal_mask_samples > 1:
         emit_log(
             "ProPainter: temporal mask "
             f"samples={engine_config.temporal_mask_samples} min_hits={engine_config.temporal_mask_min_hits}"
@@ -234,48 +204,11 @@ def run_propainter_pipeline(
     if not propainter_video.exists():
         raise RuntimeError(f"Не найден результат ProPainter: {propainter_video}")
 
-    use_compose_mask = engine_config.mask_shape == "wide_to_rotated_band" and compose_mask_path.exists()
-    emit_log("ProPainter: compose + audio mux..." if use_compose_mask else "ProPainter: upscale + audio mux...")
+    emit_log("ProPainter: upscale + audio mux...")
     emit_progress(92)
     mux_started = time.perf_counter()
-    if use_compose_mask:
-        mux_cmd = [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(input_video),
-            "-i",
-            str(propainter_video),
-            "-loop",
-            "1",
-            "-i",
-            str(compose_mask_path),
-            "-filter_complex",
-            (
-                f"[1:v]scale={info.width}:{info.height},setsar=1[paint];"
-                f"[2:v]format=gray,scale={info.width}:{info.height}[mask];"
-                "[paint][mask]alphamerge[painta];"
-                "[0:v][painta]overlay=shortest=1:format=auto[outv]"
-            ),
-            "-map",
-            "[outv]",
-            "-map",
-            "0:a?",
-            "-c:v",
-            "libx264",
-            "-crf",
-            "18",
-            "-preset",
-            "medium",
-            "-pix_fmt",
-            "yuv420p",
-            "-c:a",
-            "copy",
-            "-shortest",
-            str(output_path),
-        ]
-    else:
-        mux_cmd = [
+    _run_streaming_command(
+        [
             "ffmpeg",
             "-y",
             "-i",
@@ -299,9 +232,7 @@ def run_propainter_pipeline(
             "-c:a",
             "copy",
             str(output_path),
-        ]
-    _run_streaming_command(
-        mux_cmd,
+        ],
         register_process=register_process,
         is_cancelled=is_cancelled,
     )
