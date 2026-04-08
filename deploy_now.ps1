@@ -9,8 +9,10 @@ if (-not $repoUrl) {
 }
 
 $sshKey = Join-Path $env:USERPROFILE ".ssh\id_ed25519"
-$remoteHost = "root@69.30.85.178"
-$remotePort = 22115
+$remoteHost = "root@213.173.98.105"
+$remotePort = 37940
+$remotePodId = "kfvfx7dvsh1nwf"
+$remoteIdleTimeoutMinutes = 10
 $remoteBundle = "/tmp/watermark_deploy.bundle"
 $localBundle = Join-Path $env:TEMP ("watermark_deploy_{0}.bundle" -f ([guid]::NewGuid().ToString("N")))
 
@@ -51,6 +53,17 @@ if ($gitAuthHeader) {
     $gitAuthSetup = "GIT_AUTH_HEADER='$escapedGitAuthHeader'`nGIT_OPTS=(-c `"http.extraHeader=`$GIT_AUTH_HEADER`")"
 }
 
+$runpodApiKey = ($env:RUNPOD_API_KEY ?? "").Trim()
+$runtimeEnvSetup = @(
+    "export RUNPOD_POD_ID='$remotePodId'"
+    "export IDLE_TIMEOUT_MINUTES='$remoteIdleTimeoutMinutes'"
+)
+if ($runpodApiKey) {
+    $escapedRunpodApiKey = $runpodApiKey.Replace("'", "'\''")
+    $runtimeEnvSetup += "export RUNPOD_API_KEY='$escapedRunpodApiKey'"
+}
+$runtimeEnvScript = $runtimeEnvSetup -join "`n"
+
 try {
     & git bundle create $localBundle main
     if ($LASTEXITCODE -ne 0) {
@@ -65,6 +78,7 @@ try {
     $remoteScript = @"
 set -e
 $gitAuthSetup
+$runtimeEnvScript
 REMOTE_BUNDLE='$remoteBundle'
 REPO_URL='$repoUrl'
 if ! command -v git >/dev/null 2>&1; then
@@ -102,7 +116,7 @@ cd /workspace/watermark
 pip install -q -r requirements_web.txt
 bash scripts/setup_propainter_runtime.sh
 pkill -f uvicorn || true
-nohup python3 -m uvicorn server:app --host 0.0.0.0 --port 8000 > server.log 2>&1 &
+nohup env RUNPOD_POD_ID="`$RUNPOD_POD_ID" IDLE_TIMEOUT_MINUTES="`$IDLE_TIMEOUT_MINUTES" RUNPOD_API_KEY="`$RUNPOD_API_KEY" python3 -m uvicorn server:app --host 0.0.0.0 --port 8000 > server.log 2>&1 &
 echo '[deploy] server updated and running on port 8000'
 "@
 
