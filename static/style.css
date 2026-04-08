@@ -344,7 +344,8 @@ body::before {
 /* ── Inputs ── */
 
 input[type="text"],
-input[type="number"] {
+input[type="number"],
+select {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 0;
@@ -354,7 +355,8 @@ input[type="number"] {
   font-family: inherit;
   outline: none;
 }
-input:focus { border-color: var(--amber); box-shadow: 0 0 0 2px rgba(196,132,10,0.12); }
+input:focus,
+select:focus { border-color: var(--amber); box-shadow: 0 0 0 2px rgba(196,132,10,0.12); }
 .w-full { width: 100%; }
 .flex-1 { flex: 1; min-width: 0; }
 
@@ -529,6 +531,27 @@ input:focus { border-color: var(--amber); box-shadow: 0 0 0 2px rgba(196,132,10,
   margin-top: 8px;
   padding-top: 8px;
   border-top: 1px solid var(--border);
+  color: var(--dim);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.quality-mask-row {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: center;
+}
+
+.quality-mask-row select {
+  width: 100%;
+}
+
+.quality-mask-meta {
+  grid-column: 1 / -1;
   color: var(--dim);
   font-size: 10px;
   line-height: 1.5;
