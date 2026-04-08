@@ -292,8 +292,8 @@ def _fit_propainter_size(width: int, height: int, max_width: int, max_height: in
     scale = min(max_width / width, max_height / height)
     target_width = max(64, int(round(width * scale)))
     target_height = max(64, int(round(height * scale)))
-    target_width = min(max_width, max(64, (target_width // 8) * 8 or 64))
-    target_height = min(max_height, max(64, (target_height // 8) * 8 or 64))
+    target_width = min(max_width, max(64, (target_width // 16) * 16 or 64))
+    target_height = min(max_height, max(64, (target_height // 16) * 16 or 64))
     return target_width, target_height
 
 
