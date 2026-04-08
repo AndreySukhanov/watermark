@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Optional
+from urllib import error as urlerror
+from urllib import request as urlrequest
 
 import aiofiles
 from fastapi import FastAPI, File, Query, UploadFile, WebSocket, WebSocketDisconnect
@@ -50,6 +52,7 @@ FRAME_SKIP = int(os.environ.get("FRAME_SKIP", "4"))
 # ── Auto-stop on inactivity ─────────────────────────────────────────────────
 IDLE_TIMEOUT = int(os.environ.get("IDLE_TIMEOUT_MINUTES", "30")) * 60  # seconds
 _last_activity = time.monotonic()
+_auto_stop_warning_sent = False
 
 
 def _touch_activity():
@@ -57,30 +60,74 @@ def _touch_activity():
     _last_activity = time.monotonic()
 
 
+def _has_active_work() -> bool:
+    if any(job.status in {JobStatus.QUEUED, JobStatus.PROCESSING} for job in _queue):
+        return True
+    for runtime in _runtimes.values():
+        if runtime.cancel_requested:
+            continue
+        if any(proc and proc.poll() is None for proc in runtime.processes):
+            return True
+    return False
+
+
+def _load_runpod_api_key() -> str:
+    api_key = os.environ.get("RUNPOD_API_KEY", "").strip()
+    if api_key:
+        return api_key
+
+    config_path = Path.home() / ".runpod" / "config.toml"
+    if not config_path.exists():
+        return ""
+    try:
+        for line in config_path.read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith("apikey"):
+                _, value = line.split("=", 1)
+                return value.strip().strip('"').strip("'")
+    except Exception:
+        return ""
+    return ""
+
+
+def _stop_runpod_pod(pod_id: str) -> bool:
+    api_key = _load_runpod_api_key()
+    if not api_key:
+        return False
+
+    req = urlrequest.Request(
+        f"https://rest.runpod.io/v1/pods/{pod_id}/stop",
+        method="POST",
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    try:
+        with urlrequest.urlopen(req, timeout=20) as resp:
+            return 200 <= getattr(resp, "status", 0) < 300
+    except (urlerror.URLError, TimeoutError, ValueError):
+        return False
+
+
 async def _idle_watchdog():
     """Stop the RunPod pod if no activity for IDLE_TIMEOUT seconds."""
+    global _auto_stop_warning_sent
     while True:
         await asyncio.sleep(60)
+        if _has_active_work():
+            _touch_activity()
+            continue
         idle = time.monotonic() - _last_activity
         if idle >= IDLE_TIMEOUT:
             pod_id = os.environ.get("RUNPOD_POD_ID", "")
             if not pod_id:
-                # Try to get pod ID from runpodctl
-                try:
-                    r = subprocess.run(["runpodctl", "get", "pod"], capture_output=True, text=True, timeout=5)
-                    # Skip if we can't determine pod ID
-                except Exception:
-                    pass
+                if not _auto_stop_warning_sent:
+                    print("[auto-stop] RUNPOD_POD_ID is not set; automatic pod stop is disabled", flush=True)
+                    _auto_stop_warning_sent = True
                 continue
             print(f"[auto-stop] No activity for {IDLE_TIMEOUT//60} min — stopping pod {pod_id}")
-            try:
-                subprocess.run(
-                    ["runpodctl", "stop", "pod", pod_id],
-                    capture_output=True, timeout=10,
-                )
-            except Exception:
-                pass
-            break
+            if _stop_runpod_pod(pod_id):
+                break
+            if not _auto_stop_warning_sent:
+                print("[auto-stop] RUNPOD_API_KEY is missing or invalid; pod stop request failed", flush=True)
+                _auto_stop_warning_sent = True
 
 
 def _cleanup_work_dir(work_dir: Path):
