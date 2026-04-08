@@ -151,59 +151,6 @@ def generate_mask(
     img.save(str(out_path))
 
 
-def generate_rotated_band_mask(
-    width,
-    height,
-    regions,
-    out_path,
-    *,
-    angle_degrees=-17.0,
-    length_ratio=0.72,
-    thickness_ratio=0.20,
-    padding=0,
-    dilate=MASK_DILATE,
-    cy_ratio=0.62,
-):
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    img = Image.new("L", (width, height), 0)
-    draw = ImageDraw.Draw(img)
-    angle = math.radians(float(angle_degrees))
-    dx = math.cos(angle)
-    dy = math.sin(angle)
-    px = -dy
-    py = dx
-
-    for region in regions:
-        x = int(region["x"])
-        y = int(region["y"])
-        w = int(region["w"])
-        h = int(region["h"])
-        if w <= 0 or h <= 0:
-            continue
-        cx = x + w / 2.0
-        cy = y + h * float(cy_ratio)
-        band_len = max(24.0, w * float(length_ratio) + padding * 2.0)
-        band_thick = max(12.0, h * float(thickness_ratio) + max(0, padding) * 0.5)
-        hx = dx * band_len / 2.0
-        hy = dy * band_len / 2.0
-        tx = px * band_thick / 2.0
-        ty = py * band_thick / 2.0
-        polygon = [
-            (cx - hx - tx, cy - hy - ty),
-            (cx + hx - tx, cy + hy - ty),
-            (cx + hx + tx, cy + hy + ty),
-            (cx - hx + tx, cy - hy + ty),
-        ]
-        draw.polygon(polygon, fill=255)
-
-    if dilate > 0:
-        kernel = max(3, int(dilate) * 2 + 1)
-        if kernel % 2 == 0:
-            kernel += 1
-        img = img.filter(ImageFilter.MaxFilter(kernel))
-    img.save(str(out_path))
-
 def _temporal_sample_times(duration: float, sample_count: int) -> list[float]:
     sample_count = max(1, int(sample_count))
     if duration <= 0:

@@ -28,7 +28,7 @@ from services.iopaint_runner import (
     get_total_frames, reassemble_video,
     run_iopaint_parallel, compose_inpainted_frames, thin_frames,
     write_iopaint_config, get_worker_count, extract_reference_frame,
-    build_mask_preview, get_mask_stats, generate_rotated_band_mask, generate_temporal_mask,
+    build_mask_preview, get_mask_stats, generate_temporal_mask,
 )
 from services.propainter_runner import ensure_propainter_available, run_propainter_pipeline
 from services.watermark_detector import dedupe_regions, detect_repeated_regions
@@ -282,16 +282,7 @@ def _build_quality_analysis(body: dict) -> dict:
                     suggested_regions.append(candidate)
 
         merged_regions = dedupe_regions(base_regions + suggested_regions)
-        if config.mask_shape in {"rotated_band", "wide_to_rotated_band"}:
-            generate_rotated_band_mask(
-                width,
-                height,
-                merged_regions,
-                mask_path,
-                padding=config.mask_padding,
-                dilate=config.mask_dilate,
-            )
-        elif config.temporal_mask_samples > 1:
+        if config.temporal_mask_samples > 1:
             generate_temporal_mask(
                 input_path,
                 width,
