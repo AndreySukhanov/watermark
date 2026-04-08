@@ -32,7 +32,11 @@ from services.iopaint_runner import (
     write_iopaint_config, get_worker_count, extract_reference_frame,
     build_mask_preview, get_mask_stats, generate_temporal_mask,
 )
-from services.propainter_runner import ensure_propainter_available, run_propainter_pipeline
+from services.propainter_runner import (
+    ensure_propainter_available,
+    plan_propainter_crop_groups,
+    run_propainter_pipeline,
+)
 from services.watermark_segmenter import generate_hf_segmenter_mask, generate_hybrid_segmenter_mask
 from services.watermark_detector import dedupe_regions, detect_repeated_regions
 
@@ -378,6 +382,20 @@ def _build_quality_analysis(body: dict) -> dict:
                 dilate=config.mask_dilate,
                 reference_frame_path=reference_path if config.refine_mask else None,
             )
+        crop_groups = []
+        if config.family == "propainter" and config.propainter_use_crops:
+            crop_groups = [
+                {
+                    "index": item["index"],
+                    "x": item["x"],
+                    "y": item["y"],
+                    "w": item["w"],
+                    "h": item["h"],
+                    "region_count": item["region_count"],
+                }
+                for item in plan_propainter_crop_groups(width, height, merged_regions, config)
+            ]
+
         build_mask_preview(reference_path, mask_path, preview_path)
         stats = get_mask_stats(mask_path)
         return {
@@ -390,6 +408,7 @@ def _build_quality_analysis(body: dict) -> dict:
             "merged_region_count": len(merged_regions),
             "suggested_regions": suggested_regions,
             "merged_regions": merged_regions,
+            "crop_groups": crop_groups,
             "mask_coverage": stats["coverage"],
             "mask_bbox": stats["bbox"],
         }
