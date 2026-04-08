@@ -20,6 +20,8 @@ class AIEngineConfig:
     resize_limit: int = 1024
     output_suffix: str = ".jpg"
     output_quality: int = 99
+    mask_shape: str = "auto"
+    segmenter_threshold: float = 0.45
     propainter_width: int = 960
     propainter_height: int = 540
     propainter_subvideo_length: int = 30
@@ -40,6 +42,8 @@ class AIEngineConfig:
             "estimate_multiplier": data["estimate_multiplier"],
             "skip": data["skip"],
             "refine_mask": data["refine_mask"],
+            "mask_shape": data["mask_shape"],
+            "segmenter_threshold": data["segmenter_threshold"],
             "temporal_mask_samples": data["temporal_mask_samples"],
         }
 
@@ -60,6 +64,8 @@ AI_ENGINES: dict[str, AIEngineConfig] = {
         worker_count_override=int(os.environ.get("ENGINE_LAMA_FAST_WORKERS", "8")),
         resize_limit=int(os.environ.get("ENGINE_LAMA_FAST_RESIZE", "1024")),
         output_quality=int(os.environ.get("ENGINE_LAMA_FAST_JPEG_QUALITY", "99")),
+        mask_shape=os.environ.get("ENGINE_LAMA_FAST_MASK_SHAPE", "auto"),
+        segmenter_threshold=float(os.environ.get("ENGINE_LAMA_FAST_SEGMENTER_THRESHOLD", "0.45")),
     ),
     "propainter_quality": AIEngineConfig(
         key="propainter_quality",
@@ -75,6 +81,8 @@ AI_ENGINES: dict[str, AIEngineConfig] = {
         blend_skipped=False,
         worker_count_override=0,
         resize_limit=int(os.environ.get("ENGINE_PROPAINTER_RESIZE", "960")),
+        mask_shape=os.environ.get("ENGINE_PROPAINTER_MASK_SHAPE", "auto"),
+        segmenter_threshold=float(os.environ.get("ENGINE_PROPAINTER_SEGMENTER_THRESHOLD", "0.45")),
         propainter_width=int(os.environ.get("ENGINE_PROPAINTER_WIDTH", "960")),
         propainter_height=int(os.environ.get("ENGINE_PROPAINTER_HEIGHT", "540")),
         propainter_subvideo_length=int(os.environ.get("ENGINE_PROPAINTER_SUBVIDEO", "30")),
@@ -106,10 +114,14 @@ _INT_OVERRIDE_LIMITS: dict[str, tuple[int, int]] = {
     "temporal_mask_samples": (0, 16),
     "temporal_mask_min_hits": (1, 16),
 }
+_FLOAT_OVERRIDE_LIMITS: dict[str, tuple[float, float]] = {
+    "segmenter_threshold": (0.05, 0.95),
+}
 _BOOL_OVERRIDE_KEYS = {"refine_mask", "blend_skipped", "propainter_fp16"}
 _STR_OVERRIDE_KEYS = {
     "hd_strategy": {"Original", "Resize", "Crop"},
     "output_suffix": {".jpg", ".jpeg", ".png"},
+    "mask_shape": {"auto", "hf_segmenter"},
 }
 
 
@@ -123,6 +135,11 @@ def _coerce_bool(value) -> bool:
 
 def _coerce_int(value, min_value: int, max_value: int) -> int:
     result = int(value)
+    return max(min_value, min(max_value, result))
+
+
+def _coerce_float(value, min_value: float, max_value: float) -> float:
+    result = float(value)
     return max(min_value, min(max_value, result))
 
 
@@ -140,6 +157,11 @@ def resolve_engine_config(engine: str | None, overrides: dict | None = None) -> 
                 continue
         elif key in _BOOL_OVERRIDE_KEYS:
             updates[key] = _coerce_bool(value)
+        elif key in _FLOAT_OVERRIDE_LIMITS:
+            try:
+                updates[key] = _coerce_float(value, *_FLOAT_OVERRIDE_LIMITS[key])
+            except (TypeError, ValueError):
+                continue
         elif key in _STR_OVERRIDE_KEYS and value in _STR_OVERRIDE_KEYS[key]:
             updates[key] = value
 

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from services.ai_engines import AIEngineConfig
 from services.iopaint_runner import extract_reference_frame, generate_mask, generate_temporal_mask
+from services.watermark_segmenter import generate_hf_segmenter_mask
 from services.video_info import get_video_info
 
 PROPAINTER_DIR = Path(os.environ.get("PROPAINTER_DIR", "/workspace/ProPainter"))
@@ -108,7 +109,19 @@ def run_propainter_pipeline(
         time_sec=reference_time,
         register_process=register_process,
     )
-    if engine_config.temporal_mask_samples > 1:
+    if engine_config.mask_shape == "hf_segmenter":
+        emit_log("ProPainter: HF segmenter mask")
+        generate_hf_segmenter_mask(
+            reference_frame_path,
+            mask_path,
+            width=info.width,
+            height=info.height,
+            regions=regions,
+            padding=engine_config.mask_padding,
+            dilate=engine_config.mask_dilate,
+            threshold=engine_config.segmenter_threshold,
+        )
+    elif engine_config.temporal_mask_samples > 1:
         emit_log(
             "ProPainter: temporal mask "
             f"samples={engine_config.temporal_mask_samples} min_hits={engine_config.temporal_mask_min_hits}"
