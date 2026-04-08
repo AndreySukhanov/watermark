@@ -247,6 +247,8 @@ def extract_preview(video_path: Path, out_path: Path, at_time: float = 5.0):
             str(video_path),
             "-frames:v",
             "1",
+            "-update",
+            "1",
             "-q:v",
             "2",
             str(out_path),
@@ -260,6 +262,7 @@ def main():
     stamp = time.strftime("%Y%m%d_%H%M%S")
     run_dir = OUTPUT_ROOT / stamp
     run_dir.mkdir(parents=True, exist_ok=True)
+    preview_time = max(0.0, min(5.0, float(info.get("duration") or CLIP_DURATION) - 0.5))
 
     manifest = {
         "base_url": BASE_URL,
@@ -294,7 +297,7 @@ def main():
             video_path = engine_dir / f"{engine}.mp4"
             frame_path = engine_dir / f"{engine}_5s.jpg"
             download_result(job["download_url"], video_path)
-            extract_preview(video_path, frame_path)
+            extract_preview(video_path, frame_path, at_time=preview_time)
             entry["video_path"] = str(video_path)
             entry["frame_path"] = str(frame_path)
 
