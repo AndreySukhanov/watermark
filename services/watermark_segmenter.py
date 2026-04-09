@@ -135,6 +135,41 @@ def _dilate_mask(mask: Image.Image, dilate: int) -> Image.Image:
     return mask.filter(ImageFilter.MaxFilter(kernel)).point(lambda p: 255 if p >= 18 else 0)
 
 
+def _build_text_band_mask(width: int, height: int) -> Image.Image:
+    band = Image.new("L", (width, height), 0)
+    draw = ImageDraw.Draw(band)
+    left = max(0, int(width * 0.10))
+    right = min(width, int(width * 0.90))
+    top = max(0, int(height * 0.36))
+    bottom = min(height, int(height * 0.64))
+    if right > left and bottom > top:
+        draw.rectangle((left, top, right, bottom), fill=255)
+    band = band.filter(ImageFilter.GaussianBlur(1.2))
+    return band.point(lambda p: 255 if p >= 18 else 0)
+
+
+def _ensure_min_candidate_coverage(
+    candidate: Image.Image,
+    crop_width: int,
+    crop_height: int,
+    *,
+    min_ratio: float = 0.028,
+    max_ratio: float = 0.24,
+) -> Image.Image:
+    ratio = _mask_ratio(candidate)
+    if ratio >= min_ratio:
+        return candidate
+    fallback = _build_text_band_mask(crop_width, crop_height)
+    boosted = ImageChops.lighter(candidate, fallback)
+    boosted_ratio = _mask_ratio(boosted)
+    if boosted_ratio <= max_ratio:
+        return boosted
+    fallback_ratio = _mask_ratio(fallback)
+    if fallback_ratio <= max_ratio:
+        return fallback
+    return candidate
+
+
 def _postprocess_candidate(mask: Image.Image, crop_width: int, crop_height: int) -> Image.Image:
     from services.iopaint_runner import _filter_text_like_components
     import numpy as np
@@ -177,6 +212,7 @@ def generate_hf_segmenter_mask(
             candidate = _postprocess_candidate(hard_crop, x1 - x0, y1 - y0)
             if _mask_ratio(candidate) > 0.24:
                 candidate = hard_crop
+            candidate = _ensure_min_candidate_coverage(candidate, x1 - x0, y1 - y0)
             existing = mask.crop(box)
             mask.paste(ImageChops.lighter(existing, candidate), (x0, y0))
 
@@ -236,6 +272,7 @@ def generate_hybrid_segmenter_mask(
 
             if _mask_ratio(candidate) > 0.28 and hard_ratio > 0:
                 candidate = hard_crop
+            candidate = _ensure_min_candidate_coverage(candidate, x1 - x0, y1 - y0)
 
             existing = mask.crop(box)
             mask.paste(ImageChops.lighter(existing, candidate), (x0, y0))
