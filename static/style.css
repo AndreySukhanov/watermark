@@ -566,7 +566,7 @@ select:focus { border-color: var(--amber); box-shadow: 0 0 0 2px rgba(196,132,10
 
 .quality-preview-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 8px;
   margin-top: 10px;
 }
@@ -583,6 +583,26 @@ select:focus { border-color: var(--amber); box-shadow: 0 0 0 2px rgba(196,132,10
   border: 1px solid var(--border);
   background: var(--bg);
   object-fit: cover;
+}
+
+.quality-crop-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.quality-crop-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  border: 1px solid var(--border2);
+  background: var(--bg);
+  color: var(--dim);
+  font-family: monospace;
+  font-size: 10px;
+  letter-spacing: 0.03em;
 }
 
 /* ── Action row ── */
