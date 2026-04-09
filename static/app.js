@@ -476,23 +476,47 @@ function renderQualityAnalysis() {
   const grid = document.getElementById('quality-preview-grid');
   const ref = document.getElementById('quality-reference');
   const mask = document.getElementById('quality-mask');
+  const cropsWrap = document.getElementById('quality-crops-wrap');
+  const crops = document.getElementById('quality-crops');
+  const cropList = document.getElementById('quality-crop-list');
   if (!state.qualityAnalysis) {
     meta.textContent = 'Для анализа нужен хотя бы один регион и загруженный кадр.';
     grid.style.display = 'none';
     ref.removeAttribute('src');
     mask.removeAttribute('src');
+    crops.removeAttribute('src');
+    cropsWrap.style.display = 'none';
+    cropList.style.display = 'none';
+    cropList.innerHTML = '';
     return;
   }
   const data = state.qualityAnalysis;
   const coverage = typeof data.mask_coverage === 'number' ? data.mask_coverage.toFixed(3) : '0.000';
   const bbox = data.mask_bbox || {};
   const maskShape = formatMaskShapeLabel(data.engine?.mask_shape || 'auto');
+  const cropGroups = Array.isArray(data.crop_groups) ? data.crop_groups : [];
+  const maxCropArea = cropGroups.reduce((best, item) => Math.max(best, (item.w || 0) * (item.h || 0)), 0);
+  const largestCrop = cropGroups.find(item => ((item.w || 0) * (item.h || 0)) === maxCropArea);
   meta.textContent =
     `Engine: ${data.engine?.label || state.engine} · reference ${data.reference_time}s · ` +
     `регионов ${data.merged_region_count} · автонайдено ${data.suggested_region_count} · ` +
-    `mask ${coverage}% · ${maskShape} · bbox ${bbox.w || 0}×${bbox.h || 0}`;
+    `mask ${coverage}% · ${maskShape} · bbox ${bbox.w || 0}×${bbox.h || 0}` +
+    (cropGroups.length ? ` · crop groups ${cropGroups.length} · max ${largestCrop?.w || 0}×${largestCrop?.h || 0}` : '');
   ref.src = data.reference_url + `?_=${Date.now()}`;
   mask.src = data.mask_preview_url + `?_=${Date.now()}`;
+  if (data.crop_preview_url && cropGroups.length) {
+    crops.src = data.crop_preview_url + `?_=${Date.now()}`;
+    cropsWrap.style.display = '';
+    cropList.innerHTML = cropGroups
+      .map(group => `<span class="quality-crop-chip">#${group.index} · ${group.region_count} reg · ${group.w}×${group.h}</span>`)
+      .join('');
+    cropList.style.display = '';
+  } else {
+    crops.removeAttribute('src');
+    cropsWrap.style.display = 'none';
+    cropList.style.display = 'none';
+    cropList.innerHTML = '';
+  }
   grid.style.display = '';
 }
 

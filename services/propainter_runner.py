@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter
 
 from services.ai_engines import AIEngineConfig
 from services.iopaint_runner import (
@@ -182,6 +182,53 @@ def plan_propainter_crop_groups(width: int, height: int, regions: list[dict], en
             }
         )
     return result
+
+
+def build_propainter_crop_preview(
+    reference_frame_path: Path,
+    out_path: Path,
+    crop_groups: list[dict],
+    merged_regions: list[dict] | None = None,
+):
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    merged_regions = merged_regions or []
+
+    with Image.open(reference_frame_path) as reference_image:
+        preview = reference_image.convert("RGBA")
+        overlay = Image.new("RGBA", preview.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
+
+        crop_palette = [
+            ((224, 144, 32, 38), (236, 160, 48, 220)),
+            ((184, 48, 32, 42), (220, 96, 80, 220)),
+            ((74, 128, 80, 38), (126, 180, 118, 220)),
+            ((96, 120, 184, 34), (144, 170, 236, 220)),
+        ]
+
+        for idx, group in enumerate(crop_groups):
+            fill_rgba, stroke_rgba = crop_palette[idx % len(crop_palette)]
+            x0 = int(group["x"])
+            y0 = int(group["y"])
+            x1 = x0 + int(group["w"])
+            y1 = y0 + int(group["h"])
+            draw.rectangle((x0, y0, x1, y1), fill=fill_rgba, outline=stroke_rgba, width=3)
+            label = f"#{group['index']} · {group['region_count']}"
+            label_x = x0 + 8
+            label_y = max(4, y0 + 6)
+            draw.rectangle((label_x - 4, label_y - 2, label_x + 66, label_y + 12), fill=(8, 7, 6, 180))
+            draw.text((label_x, label_y), label, fill=stroke_rgba[:3] + (255,))
+
+        for region in merged_regions:
+            x0 = int(region["x"])
+            y0 = int(region["y"])
+            x1 = x0 + int(region["w"])
+            y1 = y0 + int(region["h"])
+            draw.rectangle((x0, y0, x1, y1), outline=(255, 245, 214, 180), width=1)
+
+        preview = Image.alpha_composite(preview, overlay)
+        preview.save(out_path)
+    return out_path
 
 
 def _watermark_signal_map(patch: np.ndarray) -> np.ndarray:

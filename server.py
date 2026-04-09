@@ -33,6 +33,7 @@ from services.iopaint_runner import (
     build_mask_preview, get_mask_stats, generate_temporal_mask,
 )
 from services.propainter_runner import (
+    build_propainter_crop_preview,
     ensure_propainter_available,
     plan_propainter_crop_groups,
     run_propainter_pipeline,
@@ -158,6 +159,7 @@ def _cleanup_stale_temp():
                 or path.match("frame_*.jpg")
                 or path.match("reference_*.jpg")
                 or path.match("mask_preview_*.png")
+                or path.match("crop_preview_*.png")
             )
             is_uploaded_source = re.fullmatch(r"[0-9a-fA-F-]{36}", path.stem) is not None
             if is_known_output or is_uploaded_source:
@@ -306,6 +308,7 @@ def _build_quality_analysis(body: dict) -> dict:
     work_dir.mkdir(parents=True, exist_ok=True)
     reference_path = TEMP / f"reference_{analysis_id}.jpg"
     preview_path = TEMP / f"mask_preview_{analysis_id}.png"
+    crop_preview_path = TEMP / f"crop_preview_{analysis_id}.png"
     mask_path = work_dir / "mask.png"
     reference_time = _reference_time(duration)
     suggested_regions: list[dict] = []
@@ -388,6 +391,7 @@ def _build_quality_analysis(body: dict) -> dict:
                 reference_frame_path=reference_path if config.refine_mask else None,
             )
         crop_groups = []
+        crop_preview_url = None
         if config.family == "propainter" and config.propainter_use_crops:
             crop_groups = [
                 {
@@ -400,6 +404,14 @@ def _build_quality_analysis(body: dict) -> dict:
                 }
                 for item in plan_propainter_crop_groups(width, height, merged_regions, config)
             ]
+            if crop_groups:
+                build_propainter_crop_preview(
+                    reference_path,
+                    crop_preview_path,
+                    crop_groups,
+                    merged_regions=merged_regions,
+                )
+                crop_preview_url = f"/api/file/{crop_preview_path.name}"
 
         build_mask_preview(reference_path, mask_path, preview_path)
         stats = get_mask_stats(mask_path)
@@ -414,6 +426,7 @@ def _build_quality_analysis(body: dict) -> dict:
             "suggested_regions": suggested_regions,
             "merged_regions": merged_regions,
             "crop_groups": crop_groups,
+            "crop_preview_url": crop_preview_url,
             "mask_coverage": stats["coverage"],
             "mask_bbox": stats["bbox"],
         }
