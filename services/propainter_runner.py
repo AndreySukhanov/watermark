@@ -7,13 +7,14 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 from services.ai_engines import AIEngineConfig
 from services.iopaint_runner import (
     extract_reference_frame,
     generate_mask,
     generate_temporal_mask,
+    get_mask_stats,
     reassemble_video,
 )
 from services.video_info import get_video_info
@@ -441,6 +442,40 @@ def _fit_propainter_size(width: int, height: int, max_width: int, max_height: in
     return target_width, target_height
 
 
+def _strengthen_crop_mask(
+    *,
+    mask_path: Path,
+    crop_width: int,
+    crop_height: int,
+    translated_regions: list[dict],
+    engine_config: AIEngineConfig,
+    emit_log,
+):
+    base_stats = get_mask_stats(mask_path)
+    if base_stats["coverage"] >= 5.0:
+        return
+
+    fallback_path = mask_path.with_name(f"{mask_path.stem}_rect.png")
+    generate_mask(
+        crop_width,
+        crop_height,
+        translated_regions,
+        fallback_path,
+        padding=max(engine_config.mask_padding + 6, 10),
+        dilate=max(engine_config.mask_dilate + 4, 6),
+        reference_frame_path=None,
+    )
+    with Image.open(mask_path) as base_mask_image, Image.open(fallback_path) as fallback_mask_image:
+        merged = ImageChops.lighter(base_mask_image.convert("L"), fallback_mask_image.convert("L"))
+        merged.save(mask_path)
+
+    merged_stats = get_mask_stats(mask_path)
+    emit_log(
+        "  Crop mask boost: "
+        f"{base_stats['coverage']:.3f}% -> {merged_stats['coverage']:.3f}%"
+    )
+
+
 def _extract_full_frames(input_video: Path, frames_dir: Path, register_process=None, is_cancelled=None):
     _ensure_clean_dir(frames_dir)
     _run_streaming_command(
@@ -790,6 +825,14 @@ def _run_propainter_crop_pipeline(
             width=crop_width,
             height=crop_height,
             regions=translated_regions,
+            engine_config=engine_config,
+            emit_log=emit_log,
+        )
+        _strengthen_crop_mask(
+            mask_path=crop_mask_path,
+            crop_width=crop_width,
+            crop_height=crop_height,
+            translated_regions=translated_regions,
             engine_config=engine_config,
             emit_log=emit_log,
         )
