@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 import requests
+from requests import RequestException
 
 
 BASE_URL = os.environ.get("BASE_URL", "http://127.0.0.1:8000").rstrip("/")
@@ -174,7 +175,11 @@ def fetch_quality_analysis(info: dict, engine: str, regions: list[dict], out_dir
     data = res.json()
     (out_dir / "analysis.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    for key, filename in [("reference_url", "reference.jpg"), ("mask_preview_url", "mask_preview.png")]:
+    for key, filename in [
+        ("reference_url", "reference.jpg"),
+        ("mask_preview_url", "mask_preview.png"),
+        ("crop_preview_url", "crop_preview.png"),
+    ]:
         url = data.get(key)
         if not url:
             continue
@@ -209,10 +214,21 @@ def enqueue_job(info: dict, engine: str, regions: list[dict]) -> str:
 def poll_job(job_id: str) -> dict:
     started_at = time.time()
     last_progress = None
+    error_streak = 0
     while True:
-        res = requests.get(f"{BASE_URL}/api/queue", timeout=120)
-        res.raise_for_status()
-        jobs = res.json()
+        try:
+            res = requests.get(f"{BASE_URL}/api/queue", timeout=120)
+            res.raise_for_status()
+            jobs = res.json()
+            error_streak = 0
+        except RequestException as exc:
+            error_streak += 1
+            elapsed = int(time.time() - started_at)
+            log(f"[job {job_id[:8]}] poll retry {error_streak}: {type(exc).__name__} ({elapsed}s)")
+            if error_streak >= 8:
+                raise
+            time.sleep(3)
+            continue
         job = next((item for item in jobs if item["job_id"] == job_id), None)
         if not job:
             raise RuntimeError(f"Задание {job_id} исчезло из очереди")
