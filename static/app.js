@@ -17,6 +17,7 @@ const state = {
   engine: 'lama_fast',
   engines: [],
   qualityMaskProfile: 'hybrid_segmenter',
+  qualityCropProfile: 'balanced',
   qualityAnalysis: null,
 };
 
@@ -83,6 +84,24 @@ const QUALITY_MASK_PRESETS = {
       mask_shape: 'hybrid_segmenter',
       segmenter_weights: 'segmenter_universal.pth',
       segmenter_threshold: 0.42,
+    },
+  },
+};
+
+const QUALITY_CROP_PRESETS = {
+  balanced: {
+    label: 'Balanced',
+    hint: 'Крупнее crop-группы, меньше запусков ProPainter. Быстрее, но больше риск зацепить лишний фон.',
+    options: {},
+  },
+  detail: {
+    label: 'Detail',
+    hint: 'Меньше и плотнее crop-группы вокруг watermark. Медленнее, но это самый перспективный quality path сейчас.',
+    options: {
+      propainter_crop_padding: 48,
+      propainter_crop_merge_gap: 16,
+      propainter_crop_max_width: 720,
+      propainter_crop_max_height: 320,
     },
   },
 };
@@ -361,6 +380,10 @@ function getSelectedQualityMaskProfile() {
   return QUALITY_MASK_PRESETS[state.qualityMaskProfile] || QUALITY_MASK_PRESETS.hybrid_segmenter;
 }
 
+function getSelectedQualityCropProfile() {
+  return QUALITY_CROP_PRESETS[state.qualityCropProfile] || QUALITY_CROP_PRESETS.balanced;
+}
+
 function formatMaskShapeLabel(maskShape) {
   if (maskShape === 'hybrid_segmenter') return 'Hybrid + Universal HF';
   if (maskShape === 'hf_segmenter') return 'HF Universal';
@@ -370,23 +393,35 @@ function formatMaskShapeLabel(maskShape) {
 function getEngineOptions() {
   const engine = getSelectedEngine();
   if (!engine || engine.family !== 'propainter') return {};
-  return { ...getSelectedQualityMaskProfile().options };
+  return {
+    ...getSelectedQualityMaskProfile().options,
+    ...getSelectedQualityCropProfile().options,
+  };
 }
 
 function renderQualityMaskControls() {
   const row = document.getElementById('quality-mask-row');
   const select = document.getElementById('quality-mask-shape');
   const meta = document.getElementById('quality-mask-meta');
+  const cropRow = document.getElementById('quality-crop-row');
+  const cropSelect = document.getElementById('quality-crop-profile');
+  const cropMeta = document.getElementById('quality-crop-meta');
   const engine = getSelectedEngine();
   const visible = mode === 'ai' && engine?.family === 'propainter';
   row.style.display = visible ? '' : 'none';
+  cropRow.style.display = visible ? '' : 'none';
   if (!visible) return;
 
   if (!QUALITY_MASK_PRESETS[state.qualityMaskProfile]) {
     state.qualityMaskProfile = 'hybrid_segmenter';
   }
+  if (!QUALITY_CROP_PRESETS[state.qualityCropProfile]) {
+    state.qualityCropProfile = 'balanced';
+  }
   select.value = state.qualityMaskProfile;
   meta.textContent = getSelectedQualityMaskProfile().hint;
+  cropSelect.value = state.qualityCropProfile;
+  cropMeta.textContent = getSelectedQualityCropProfile().hint;
 }
 
 function renderEngineList() {
@@ -413,6 +448,7 @@ function updateAiModeMeta() {
   const meta = document.getElementById('engine-meta');
   const engine = getSelectedEngine();
   const maskProfile = getSelectedQualityMaskProfile();
+  const cropProfile = getSelectedQualityCropProfile();
 
   engineRow.style.display = mode === 'ai' ? '' : 'none';
   warning.style.display = mode === 'ai' ? '' : 'none';
@@ -434,10 +470,11 @@ function updateAiModeMeta() {
   const refinePart = engine.family === 'propainter'
     ? maskProfile.label
     : (engine.refine_mask ? 'refined mask' : 'простая mask');
+  const cropPart = engine.family === 'propainter' ? cropProfile.label : null;
   warning.textContent = estimate
-    ? `${engine.label}: ориентир ~${estimate} · ${skipPart} · ${refinePart}.`
+    ? `${engine.label}: ориентир ~${estimate} · ${skipPart} · ${refinePart}${cropPart ? ` · ${cropPart}` : ''}.`
     : `${engine.label}: ${engine.description}`;
-  meta.textContent = `${engine.description} Режим: ${skipPart}. Маска: ${refinePart}.`;
+  meta.textContent = `${engine.description} Режим: ${skipPart}. Маска: ${refinePart}.${cropPart ? ` Crop: ${cropPart}.` : ''}`;
 }
 
 function setEngine(key) {
@@ -450,6 +487,14 @@ function setEngine(key) {
 function setQualityMaskProfile(value) {
   if (!QUALITY_MASK_PRESETS[value]) value = 'hybrid_segmenter';
   state.qualityMaskProfile = value;
+  invalidateQualityAnalysis();
+  renderQualityMaskControls();
+  updateAiModeMeta();
+}
+
+function setQualityCropProfile(value) {
+  if (!QUALITY_CROP_PRESETS[value]) value = 'balanced';
+  state.qualityCropProfile = value;
   invalidateQualityAnalysis();
   renderQualityMaskControls();
   updateAiModeMeta();

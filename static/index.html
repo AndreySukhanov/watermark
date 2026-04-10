@@ -118,6 +118,14 @@
               </select>
               <div class="quality-mask-meta" id="quality-mask-meta">—</div>
             </div>
+            <div class="quality-mask-row" id="quality-crop-row" style="display:none">
+              <div class="label-inline">Crop Profile</div>
+              <select id="quality-crop-profile" onchange="setQualityCropProfile(this.value)">
+                <option value="balanced">Balanced</option>
+                <option value="detail">Detail</option>
+              </select>
+              <div class="quality-mask-meta" id="quality-crop-meta">—</div>
+            </div>
           </div>
           <div id="device-row" style="display:none; margin-top:8px">
             <div class="mode-row">
