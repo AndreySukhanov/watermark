@@ -828,14 +828,15 @@ def _run_propainter_crop_pipeline(
             engine_config=engine_config,
             emit_log=emit_log,
         )
-        _strengthen_crop_mask(
-            mask_path=crop_mask_path,
-            crop_width=crop_width,
-            crop_height=crop_height,
-            translated_regions=translated_regions,
-            engine_config=engine_config,
-            emit_log=emit_log,
-        )
+        if engine_config.propainter_crop_mask_boost:
+            _strengthen_crop_mask(
+                mask_path=crop_mask_path,
+                crop_width=crop_width,
+                crop_height=crop_height,
+                translated_regions=translated_regions,
+                engine_config=engine_config,
+                emit_log=emit_log,
+            )
 
         emit_log(f"ProPainter crop {index}/{len(crop_groups)}: кадры...")
         crop_extract_started = time.perf_counter()
