@@ -21,6 +21,7 @@ from services.iopaint_runner import (
 from services.propainter_runner import (
     build_propainter_crop_preview,
     plan_propainter_crop_groups,
+    tighten_regions_to_mask,
     tighten_propainter_regions,
 )
 from services.video_info import get_video_info
@@ -255,6 +256,7 @@ def build_quality_analysis(
 
         crop_groups = []
         if config.family == "propainter" and config.propainter_use_crops:
+            crop_regions = tighten_regions_to_mask(mask_path, merged_regions, info.width, info.height)
             crop_groups = [
                 {
                     "index": item["index"],
@@ -264,7 +266,7 @@ def build_quality_analysis(
                     "h": item["h"],
                     "region_count": item["region_count"],
                 }
-                for item in plan_propainter_crop_groups(info.width, info.height, merged_regions, config)
+                for item in plan_propainter_crop_groups(info.width, info.height, crop_regions, config)
             ]
             if crop_groups:
                 build_propainter_crop_preview(

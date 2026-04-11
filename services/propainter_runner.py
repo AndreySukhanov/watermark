@@ -377,6 +377,59 @@ def tighten_propainter_regions(
     return tightened
 
 
+def tighten_regions_to_mask(
+    mask_path: Path,
+    regions: list[dict],
+    width: int,
+    height: int,
+) -> list[dict]:
+    if not regions:
+        return []
+
+    with Image.open(mask_path) as mask_image:
+        mask = np.asarray(mask_image.convert("L"), dtype=np.uint8)
+
+    tightened = []
+    for region in regions:
+        x = max(0, int(region["x"]))
+        y = max(0, int(region["y"]))
+        w = max(1, int(region["w"]))
+        h = max(1, int(region["h"]))
+        x1 = min(width, x + w)
+        y1 = min(height, y + h)
+        if x1 <= x or y1 <= y:
+            tightened.append(dict(region))
+            continue
+
+        crop = mask[y:y1, x:x1]
+        points = np.argwhere(crop > 0)
+        if not points.size:
+            tightened.append({"x": x, "y": y, "w": x1 - x, "h": y1 - y})
+            continue
+
+        cy0, cx0 = points.min(axis=0)
+        cy1, cx1 = points.max(axis=0)
+        bbox_w = max(1, int(cx1 - cx0 + 1))
+        bbox_h = max(1, int(cy1 - cy0 + 1))
+        pad_x = max(6, int(round(bbox_w * 0.35)))
+        pad_y = max(4, int(round(bbox_h * 0.45)))
+
+        tx0 = max(0, x + max(0, cx0 - pad_x))
+        ty0 = max(0, y + max(0, cy0 - pad_y))
+        tx1 = min(width, x + min(x1 - x, cx1 + 1 + pad_x))
+        ty1 = min(height, y + min(y1 - y, cy1 + 1 + pad_y))
+        tightened.append(
+            {
+                "x": tx0,
+                "y": ty0,
+                "w": max(1, tx1 - tx0),
+                "h": max(1, ty1 - ty0),
+            }
+        )
+
+    return tightened
+
+
 def _translate_regions(regions: list[dict], box) -> list[dict]:
     x0, y0, _, _ = box
     return [
@@ -839,6 +892,7 @@ def _run_propainter_crop_pipeline(
     reference_frame_path = work_dir / "reference.jpg"
     source_frames_dir = work_dir / "source_frames"
     composed_frames_dir = work_dir / "composed_frames"
+    planning_mask_path = work_dir / "planning_mask.png"
 
     emit_log(f"ProPainter crop: reference frame {reference_time:.1f}s")
     emit_progress(4)
@@ -853,7 +907,22 @@ def _run_propainter_crop_pipeline(
         effective_regions = tighten_propainter_regions(reference_frame_path, regions, info.width, info.height)
         emit_log(f"ProPainter: tightened regions {len(effective_regions)}")
 
-    crop_groups = plan_propainter_crop_groups(info.width, info.height, effective_regions, engine_config)
+    emit_log("ProPainter crop: planning mask...")
+    _build_mask(
+        reference_frame_path=reference_frame_path,
+        mask_path=planning_mask_path,
+        width=info.width,
+        height=info.height,
+        regions=effective_regions,
+        engine_config=engine_config,
+        emit_log=emit_log,
+        input_video=input_video,
+        duration=info.duration,
+        work_dir=work_dir,
+        register_process=register_process,
+    )
+    planning_regions = tighten_regions_to_mask(planning_mask_path, effective_regions, info.width, info.height)
+    crop_groups = plan_propainter_crop_groups(info.width, info.height, planning_regions, engine_config)
     if not crop_groups:
         raise RuntimeError("Не удалось построить crop-группы для ProPainter")
     emit_log(f"ProPainter crop groups: {len(crop_groups)}")
