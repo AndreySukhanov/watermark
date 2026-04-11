@@ -64,9 +64,9 @@ def _filter_text_like_components(candidate: np.ndarray, crop_width: int, crop_he
 
     count, labels, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
     filtered = np.zeros_like(binary)
-    max_area = max(80, int(crop_width * crop_height * 0.035))
-    max_width = max(24, int(crop_width * 0.38))
-    max_height = max(16, int(crop_height * 0.60))
+    max_area = max(120, int(crop_width * crop_height * 0.065))
+    max_width = max(36, int(crop_width * 0.78))
+    max_height = max(18, int(crop_height * 0.78))
 
     for idx in range(1, count):
         x, y, w, h, area = stats[idx]
@@ -82,26 +82,44 @@ def _filter_text_like_components(candidate: np.ndarray, crop_width: int, crop_he
 
 
 def _refine_region_mask(frame_crop: Image.Image) -> Image.Image:
-    gray = frame_crop.convert("L")
-    blur = gray.filter(ImageFilter.GaussianBlur(10))
-    detail = ImageChops.subtract(gray, blur)
-    bright = gray.point(lambda p: 255 if p >= 136 else 0)
-    detail = detail.point(lambda p: 255 if p >= 18 else 0)
-    candidate = ImageChops.multiply(bright, detail).point(lambda p: 255 if p >= 60 else 0)
+    crop_width, crop_height = frame_crop.size
+    rgb = np.asarray(frame_crop.convert("RGB"))
+    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
 
-    candidate_np = np.asarray(candidate, dtype=np.uint8)
-    candidate_np = _filter_text_like_components(candidate_np, *frame_crop.size)
+    value = hsv[:, :, 2].astype(np.float32)
+    saturation = hsv[:, :, 1].astype(np.float32)
+    blur = cv2.GaussianBlur(gray, (0, 0), 6).astype(np.float32)
+    detail = gray.astype(np.float32) - blur
+    top_hat = cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, np.ones((5, 5), np.uint8)).astype(np.float32)
+
+    bright_cutoff = max(128.0, float(np.percentile(value, 62)))
+    sat_cutoff = min(110.0, float(np.percentile(saturation, 58)))
+    bright_low_sat = (value >= bright_cutoff) & (saturation <= sat_cutoff)
+    stroke_like = (detail >= 8.0) | (top_hat >= 10.0)
+
+    band_mask = np.asarray(_build_band_mask(crop_width, crop_height), dtype=np.uint8) > 0
+    raw_candidate = (bright_low_sat & stroke_like & band_mask).astype(np.uint8) * 255
+    relaxed_candidate = (bright_low_sat & band_mask).astype(np.uint8) * 255
+
+    candidate_np = _filter_text_like_components(raw_candidate, crop_width, crop_height)
     candidate = Image.fromarray(candidate_np, mode="L")
     candidate = candidate.filter(ImageFilter.MaxFilter(3))
     candidate = candidate.filter(ImageFilter.GaussianBlur(0.8))
     candidate = candidate.point(lambda p: 255 if p >= 18 else 0)
 
     ratio = _mask_pixel_ratio(candidate)
-    if MASK_MIN_RATIO <= ratio <= min(MASK_MAX_RATIO, 0.075):
+    relaxed_ratio = float((relaxed_candidate > 0).mean())
+    if MASK_MIN_RATIO <= ratio <= min(MASK_MAX_RATIO, 0.085):
         return candidate
+    if ratio < MASK_MIN_RATIO and MASK_MIN_RATIO <= relaxed_ratio <= min(MASK_MAX_RATIO, 0.12):
+        relaxed = Image.fromarray(relaxed_candidate, mode="L")
+        relaxed = relaxed.filter(ImageFilter.MaxFilter(3))
+        relaxed = relaxed.filter(ImageFilter.GaussianBlur(0.8))
+        return relaxed.point(lambda p: 255 if p >= 18 else 0)
     if ratio > 0:
         return candidate
-    return _build_band_mask(*frame_crop.size)
+    return _build_band_mask(crop_width, crop_height)
 
 
 def generate_mask(
