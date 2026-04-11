@@ -278,6 +278,10 @@ def build_quality_analysis(
 
         build_mask_preview(reference_path, mask_path, mask_preview_path)
         stats = get_mask_stats(mask_path)
+        crop_area_total = sum(int(item["w"]) * int(item["h"]) for item in crop_groups)
+        frame_area = max(1, int(info.width) * int(info.height))
+        crop_area_pct = round(crop_area_total / frame_area * 100, 3)
+
         return {
             "input_path": str(input_path),
             "engine": config.to_metadata(),
@@ -293,6 +297,8 @@ def build_quality_analysis(
             "suggested_regions": suggested_regions,
             "merged_regions": merged_regions,
             "crop_groups": crop_groups,
+            "crop_area_total": crop_area_total,
+            "crop_area_pct": crop_area_pct,
             "mask_coverage": stats["coverage"],
             "mask_bbox": stats["bbox"],
             "video_info": {
@@ -335,6 +341,7 @@ def main():
             "engine": analysis["engine"]["key"],
             "mask_coverage": analysis["mask_coverage"],
             "crop_groups": len(analysis["crop_groups"] or []),
+            "crop_area_pct": analysis["crop_area_pct"],
         },
         ensure_ascii=False,
     ))
