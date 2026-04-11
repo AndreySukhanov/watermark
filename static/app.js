@@ -109,8 +109,8 @@ const QUALITY_CROP_PRESETS = {
     label: 'Detail',
     hint: 'Меньше и плотнее crop-группы вокруг watermark. Медленнее, но это самый перспективный quality path сейчас.',
     options: {
-      propainter_crop_padding: 24,
-      propainter_crop_merge_gap: 8,
+      propainter_crop_padding: 16,
+      propainter_crop_merge_gap: 6,
       propainter_crop_max_width: 720,
       propainter_crop_max_height: 320,
     },
