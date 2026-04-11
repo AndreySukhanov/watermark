@@ -185,6 +185,80 @@ def _postprocess_candidate(mask: Image.Image, crop_width: int, crop_height: int)
     return candidate.point(lambda p: 255 if p >= 18 else 0)
 
 
+def _trim_candidate_to_projection(mask: Image.Image, crop_width: int, crop_height: int) -> Image.Image:
+    import numpy as np
+
+    candidate_np = (np.asarray(mask, dtype=np.uint8) > 0).astype(np.uint8)
+    if candidate_np.max() == 0:
+        return mask
+
+    row_hits = candidate_np.sum(axis=1)
+    col_hits = candidate_np.sum(axis=0)
+    if row_hits.max() <= 0 or col_hits.max() <= 0:
+        return mask
+
+    row_threshold = max(2, int(row_hits.max() * 0.16))
+    col_threshold = max(2, int(col_hits.max() * 0.08))
+    row_idx = np.where(row_hits >= row_threshold)[0]
+    col_idx = np.where(col_hits >= col_threshold)[0]
+    if row_idx.size == 0 or col_idx.size == 0:
+        return mask
+
+    pad_y = max(3, int(round(crop_height * 0.08)))
+    pad_x = max(6, int(round(crop_width * 0.06)))
+    y0 = max(0, int(row_idx[0]) - pad_y)
+    y1 = min(crop_height, int(row_idx[-1]) + 1 + pad_y)
+    x0 = max(0, int(col_idx[0]) - pad_x)
+    x1 = min(crop_width, int(col_idx[-1]) + 1 + pad_x)
+    if x1 <= x0 or y1 <= y0:
+        return mask
+
+    focus = Image.new("L", (crop_width, crop_height), 0)
+    ImageDraw.Draw(focus).rectangle((x0, y0, x1, y1), fill=255)
+    trimmed = ImageChops.multiply(mask.convert("L"), focus)
+    return trimmed.point(lambda p: 255 if p >= 18 else 0)
+
+
+def _compose_temporal_hf_candidate(
+    hf_crop: Image.Image,
+    temporal_crop: Image.Image,
+    crop_width: int,
+    crop_height: int,
+) -> Image.Image:
+    temporal_candidate = _trim_candidate_to_projection(
+        _postprocess_candidate(temporal_crop, crop_width, crop_height),
+        crop_width,
+        crop_height,
+    )
+    hf_candidate = _trim_candidate_to_projection(
+        _postprocess_candidate(hf_crop, crop_width, crop_height),
+        crop_width,
+        crop_height,
+    )
+
+    temporal_ratio = _mask_ratio(temporal_candidate)
+    hf_ratio = _mask_ratio(hf_candidate)
+    if temporal_ratio <= 0 and hf_ratio <= 0:
+        return Image.new("L", (crop_width, crop_height), 0)
+    if temporal_ratio <= 0:
+        return _ensure_min_candidate_coverage(hf_candidate, crop_width, crop_height, min_ratio=0.010, max_ratio=0.18)
+    if hf_ratio <= 0:
+        return _ensure_min_candidate_coverage(temporal_candidate, crop_width, crop_height, min_ratio=0.010, max_ratio=0.18)
+
+    temporal_support = _dilate_mask(temporal_candidate, 2)
+    guided_hf = Image.composite(hf_candidate, Image.new("L", hf_candidate.size, 0), temporal_support)
+    candidate = ImageChops.lighter(temporal_candidate, guided_hf)
+    candidate = _trim_candidate_to_projection(candidate, crop_width, crop_height)
+    candidate = _postprocess_candidate(candidate, crop_width, crop_height)
+
+    candidate_ratio = _mask_ratio(candidate)
+    if candidate_ratio > 0.18:
+        candidate = temporal_candidate
+    elif candidate_ratio < 0.003 and hf_ratio > temporal_ratio:
+        candidate = hf_candidate
+    return _ensure_min_candidate_coverage(candidate, crop_width, crop_height, min_ratio=0.010, max_ratio=0.18)
+
+
 def generate_hf_segmenter_mask(
     reference_frame_path,
     out_path,
@@ -335,12 +409,20 @@ def generate_temporal_hf_segmenter_mask(
         register_process=register_process,
     )
 
+    mask = Image.new("L", (width, height), 0)
     with Image.open(hf_mask_path) as hf_mask_image, Image.open(temporal_mask_path) as temporal_mask_image:
-        combined = ImageChops.lighter(
-            hf_mask_image.convert("L"),
-            temporal_mask_image.convert("L"),
-        )
-        combined = combined.filter(ImageFilter.MaxFilter(3))
-        combined = combined.point(lambda p: 255 if p >= 18 else 0)
-        combined.save(out_path)
+        hf_mask = hf_mask_image.convert("L")
+        temporal_mask = temporal_mask_image.convert("L")
+        for box in _iter_region_boxes(width, height, regions, padding):
+            x0, y0, x1, y1 = box
+            candidate = _compose_temporal_hf_candidate(
+                hf_mask.crop(box),
+                temporal_mask.crop(box),
+                x1 - x0,
+                y1 - y0,
+            )
+            existing = mask.crop(box)
+            mask.paste(ImageChops.lighter(existing, candidate), (x0, y0))
+    mask = _dilate_mask(mask, dilate)
+    mask.save(out_path)
     return out_path
