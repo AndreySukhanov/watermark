@@ -153,7 +153,7 @@ _BOOL_OVERRIDE_KEYS = {
 _STR_OVERRIDE_KEYS = {
     "hd_strategy": {"Original", "Resize", "Crop"},
     "output_suffix": {".jpg", ".jpeg", ".png"},
-    "mask_shape": {"auto", "hf_segmenter", "hybrid_segmenter"},
+    "mask_shape": {"auto", "hf_segmenter", "hybrid_segmenter", "temporal_hf_segmenter"},
     "segmenter_weights": {"segmenter.pth", "segmenter_universal.pth"},
 }
 

@@ -77,6 +77,17 @@ const QUALITY_MASK_PRESETS = {
       segmenter_threshold: 0.45,
     },
   },
+  temporal_hf_segmenter: {
+    label: 'Temporal + Universal HF',
+    hint: 'Локально самый перспективный профиль: объединяет temporal hits и HF universal, чтобы убирать грубые полосы glyph-mask.',
+    options: {
+      mask_shape: 'temporal_hf_segmenter',
+      segmenter_weights: 'segmenter_universal.pth',
+      segmenter_threshold: 0.25,
+      temporal_mask_samples: 6,
+      temporal_mask_min_hits: 2,
+    },
+  },
   hybrid_segmenter: {
     label: 'Hybrid + Universal HF',
     hint: 'Рекомендуемый quality path: glyph-mask + HF universal, с ограничением по регионам.',
@@ -387,6 +398,7 @@ function getSelectedQualityCropProfile() {
 function formatMaskShapeLabel(maskShape) {
   if (maskShape === 'hybrid_segmenter') return 'Hybrid + Universal HF';
   if (maskShape === 'hf_segmenter') return 'HF Universal';
+  if (maskShape === 'temporal_hf_segmenter') return 'Temporal + Universal HF';
   return 'Glyph / Auto';
 }
 

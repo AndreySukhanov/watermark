@@ -11,6 +11,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 from services.ai_engines import AIEngineConfig
 from services.iopaint_runner import (
+    _temporal_region_candidate,
     extract_reference_frame,
     generate_mask,
     generate_temporal_mask,
@@ -18,7 +19,11 @@ from services.iopaint_runner import (
     reassemble_video,
 )
 from services.video_info import get_video_info
-from services.watermark_segmenter import generate_hf_segmenter_mask, generate_hybrid_segmenter_mask
+from services.watermark_segmenter import (
+    generate_hf_segmenter_mask,
+    generate_hybrid_segmenter_mask,
+    generate_temporal_hf_segmenter_mask,
+)
 
 PROPAINTER_DIR = Path(os.environ.get("PROPAINTER_DIR", "/workspace/ProPainter"))
 PROPAINTER_PYTHON = os.environ.get("PROPAINTER_PYTHON", "python3")
@@ -282,13 +287,57 @@ def tighten_propainter_regions(
             tightened.append(dict(region))
             continue
 
+        patch_w = patch.shape[1]
+        patch_h = patch.shape[0]
+        temporal_candidate = _temporal_region_candidate(Image.fromarray((patch * 255.0).clip(0, 255).astype(np.uint8)))
+        candidate_points = np.argwhere(temporal_candidate > 0)
+        if candidate_points.size:
+            cy0, cx0 = candidate_points.min(axis=0)
+            cy1, cx1 = candidate_points.max(axis=0)
+            bbox_w = max(1, int(cx1 - cx0 + 1))
+            bbox_h = max(1, int(cy1 - cy0 + 1))
+            coverage = float((temporal_candidate > 0).mean())
+            if 0.002 <= coverage <= 0.16:
+                center_x = (cx0 + cx1) / 2.0
+                center_y = (cy0 + cy1) / 2.0
+                target_w = min(patch_w, max(int(round(bbox_w * 2.0)), int(round(patch_w * 0.42)), 84))
+                target_h = min(patch_h, max(int(round(bbox_h * 2.2)), int(round(patch_h * 0.38)), 38))
+                if target_w * target_h >= int(patch_w * patch_h * 0.92):
+                    tightened.append({"x": x, "y": y, "w": patch_w, "h": patch_h})
+                    continue
+                tx0 = int(round(center_x - target_w / 2.0))
+                ty0 = int(round(center_y - target_h / 2.0))
+                tx1 = tx0 + target_w
+                ty1 = ty0 + target_h
+                if tx0 < 0:
+                    tx1 -= tx0
+                    tx0 = 0
+                if ty0 < 0:
+                    ty1 -= ty0
+                    ty0 = 0
+                if tx1 > patch_w:
+                    shift = tx1 - patch_w
+                    tx0 = max(0, tx0 - shift)
+                    tx1 = patch_w
+                if ty1 > patch_h:
+                    shift = ty1 - patch_h
+                    ty0 = max(0, ty0 - shift)
+                    ty1 = patch_h
+                tightened.append(
+                    {
+                        "x": x + tx0,
+                        "y": y + ty0,
+                        "w": tx1 - tx0,
+                        "h": ty1 - ty0,
+                    }
+                )
+                continue
+
         signal = _watermark_signal_map(patch)
         if float(signal.max()) < 0.12 or patch.shape[1] < 120 or patch.shape[0] < 48:
             tightened.append({"x": x, "y": y, "w": x1 - x, "h": y1 - y})
             continue
 
-        patch_w = patch.shape[1]
-        patch_h = patch.shape[0]
         win_w = min(patch_w, max(96, int(round(patch_w * 0.72))))
         win_h = min(patch_h, max(42, int(round(patch_h * 0.62))))
         if win_w >= patch_w or win_h >= patch_h:
@@ -387,6 +436,36 @@ def _build_mask(
             dilate=engine_config.mask_dilate,
             threshold=engine_config.segmenter_threshold,
             weights_name=engine_config.segmenter_weights,
+        )
+        return
+
+    if (
+        engine_config.mask_shape == "temporal_hf_segmenter"
+        and input_video is not None
+        and duration is not None
+        and work_dir is not None
+    ):
+        emit_log(
+            "ProPainter: temporal + HF mask "
+            f"samples={max(4, int(engine_config.temporal_mask_samples or 6))} "
+            f"min_hits={max(1, int(engine_config.temporal_mask_min_hits or 2))}"
+        )
+        generate_temporal_hf_segmenter_mask(
+            input_video,
+            reference_frame_path,
+            mask_path,
+            width=width,
+            height=height,
+            duration=duration,
+            regions=regions,
+            work_dir=work_dir,
+            padding=engine_config.mask_padding,
+            dilate=engine_config.mask_dilate,
+            threshold=engine_config.segmenter_threshold,
+            weights_name=engine_config.segmenter_weights,
+            samples=max(4, int(engine_config.temporal_mask_samples or 6)),
+            min_hits=max(1, int(engine_config.temporal_mask_min_hits or 2)),
+            register_process=register_process,
         )
         return
 

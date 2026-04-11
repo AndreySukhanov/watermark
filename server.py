@@ -39,7 +39,11 @@ from services.propainter_runner import (
     run_propainter_pipeline,
     tighten_propainter_regions,
 )
-from services.watermark_segmenter import generate_hf_segmenter_mask, generate_hybrid_segmenter_mask
+from services.watermark_segmenter import (
+    generate_hf_segmenter_mask,
+    generate_hybrid_segmenter_mask,
+    generate_temporal_hf_segmenter_mask,
+)
 from services.watermark_detector import dedupe_regions, detect_repeated_regions
 
 BASE = Path(__file__).parent
@@ -366,6 +370,23 @@ def _build_quality_analysis(body: dict) -> dict:
                 threshold=config.segmenter_threshold,
                 weights_name=config.segmenter_weights,
             )
+        elif config.mask_shape == "temporal_hf_segmenter":
+            generate_temporal_hf_segmenter_mask(
+                input_path,
+                reference_path,
+                mask_path,
+                width=width,
+                height=height,
+                duration=duration,
+                regions=merged_regions,
+                work_dir=work_dir,
+                padding=config.mask_padding,
+                dilate=config.mask_dilate,
+                threshold=config.segmenter_threshold,
+                weights_name=config.segmenter_weights,
+                samples=max(4, int(config.temporal_mask_samples or 6)),
+                min_hits=max(1, int(config.temporal_mask_min_hits or 2)),
+            )
         elif config.temporal_mask_samples > 1:
             generate_temporal_mask(
                 input_path,
@@ -560,7 +581,7 @@ def _prepare_mask_assets(
     reference_frame_path = None
     reference_time = _reference_time(duration)
 
-    if config.refine_mask or config.mask_shape in {"hf_segmenter", "hybrid_segmenter"}:
+    if config.refine_mask or config.mask_shape in {"hf_segmenter", "hybrid_segmenter", "temporal_hf_segmenter"}:
         reference_frame_path = work_dir / "reference.jpg"
         extract_reference_frame(
             input_path,
@@ -593,6 +614,24 @@ def _prepare_mask_assets(
             dilate=config.mask_dilate,
             threshold=config.segmenter_threshold,
             weights_name=config.segmenter_weights,
+        )
+    elif config.mask_shape == "temporal_hf_segmenter":
+        generate_temporal_hf_segmenter_mask(
+            input_path,
+            reference_frame_path,
+            mask_path,
+            width=width,
+            height=height,
+            duration=duration,
+            regions=regions,
+            work_dir=work_dir,
+            padding=config.mask_padding,
+            dilate=config.mask_dilate,
+            threshold=config.segmenter_threshold,
+            weights_name=config.segmenter_weights,
+            samples=max(4, int(config.temporal_mask_samples or 6)),
+            min_hits=max(1, int(config.temporal_mask_min_hits or 2)),
+            register_process=register_process,
         )
     else:
         generate_mask(
