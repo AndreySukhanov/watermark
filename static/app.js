@@ -552,13 +552,14 @@ function renderQualityAnalysis() {
   const bbox = data.mask_bbox || {};
   const maskShape = formatMaskShapeLabel(data.engine?.mask_shape || 'auto');
   const cropGroups = Array.isArray(data.crop_groups) ? data.crop_groups : [];
+  const cropAreaPct = typeof data.crop_area_pct === 'number' ? data.crop_area_pct.toFixed(3) : '0.000';
   const maxCropArea = cropGroups.reduce((best, item) => Math.max(best, (item.w || 0) * (item.h || 0)), 0);
   const largestCrop = cropGroups.find(item => ((item.w || 0) * (item.h || 0)) === maxCropArea);
   meta.textContent =
     `Engine: ${data.engine?.label || state.engine} · reference ${data.reference_time}s · ` +
     `регионов ${data.merged_region_count} · автонайдено ${data.suggested_region_count} · ` +
     `mask ${coverage}% · ${maskShape} · bbox ${bbox.w || 0}×${bbox.h || 0}` +
-    (cropGroups.length ? ` · crop groups ${cropGroups.length} · max ${largestCrop?.w || 0}×${largestCrop?.h || 0}` : '');
+    (cropGroups.length ? ` · crop groups ${cropGroups.length} · sum ${cropAreaPct}% · max ${largestCrop?.w || 0}×${largestCrop?.h || 0}` : '');
   ref.src = data.reference_url + `?_=${Date.now()}`;
   mask.src = data.mask_preview_url + `?_=${Date.now()}`;
   if (data.crop_preview_url && cropGroups.length) {
@@ -626,7 +627,10 @@ async function analyzeQuality(autodetect = false) {
       redraw();
       appendLog(`+ Auto-detect: найдено ${data.suggested_region_count} дополнительных регионов`);
     } else {
-      appendLog(`+ Quality analyze: mask ${data.mask_coverage.toFixed(3)}%`);
+      const cropPart = typeof data.crop_area_pct === 'number' && data.crop_groups?.length
+        ? ` · crops ${data.crop_area_pct.toFixed(3)}%`
+        : '';
+      appendLog(`+ Quality analyze: mask ${data.mask_coverage.toFixed(3)}%${cropPart}`);
     }
     renderQualityAnalysis();
   } catch (e) {

@@ -290,6 +290,12 @@ def _normalize_regions(raw_regions: list[dict] | None) -> list[dict]:
     return dedupe_regions(normalized)
 
 
+def _summarize_crop_groups(crop_groups: list[dict], width: int, height: int) -> tuple[int, float]:
+    total_area = sum(max(0, int(item.get("w", 0))) * max(0, int(item.get("h", 0))) for item in crop_groups)
+    frame_area = max(1, int(width) * int(height))
+    return total_area, round(total_area / frame_area * 100, 3)
+
+
 def _build_quality_analysis(body: dict) -> dict:
     input_path = body.get("path")
     if not input_path:
@@ -435,6 +441,7 @@ def _build_quality_analysis(body: dict) -> dict:
                     merged_regions=merged_regions,
                 )
                 crop_preview_url = f"/api/file/{crop_preview_path.name}"
+        crop_area_total, crop_area_pct = _summarize_crop_groups(crop_groups, width, height)
 
         build_mask_preview(reference_path, mask_path, preview_path)
         stats = get_mask_stats(mask_path)
@@ -450,6 +457,8 @@ def _build_quality_analysis(body: dict) -> dict:
             "merged_regions": merged_regions,
             "crop_groups": crop_groups,
             "crop_preview_url": crop_preview_url,
+            "crop_area_total": crop_area_total,
+            "crop_area_pct": crop_area_pct,
             "mask_coverage": stats["coverage"],
             "mask_bbox": stats["bbox"],
         }
