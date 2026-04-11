@@ -280,3 +280,67 @@ def generate_hybrid_segmenter_mask(
     mask = _dilate_mask(mask, dilate)
     mask.save(out_path)
     return out_path
+
+
+def generate_temporal_hf_segmenter_mask(
+    input_video,
+    reference_frame_path,
+    out_path,
+    *,
+    width: int,
+    height: int,
+    duration: float,
+    regions: list[dict] | None = None,
+    work_dir,
+    padding: int = 12,
+    dilate: int = 4,
+    threshold: float = 0.45,
+    weights_name: str = HF_WATERMARK_DEFAULT_WEIGHTS,
+    samples: int = 6,
+    min_hits: int = 2,
+    register_process=None,
+):
+    from services.iopaint_runner import generate_temporal_mask
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    work_dir = Path(work_dir)
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    hf_mask_path = work_dir / "mask_hf.png"
+    temporal_mask_path = work_dir / "mask_temporal.png"
+    generate_hf_segmenter_mask(
+        reference_frame_path,
+        hf_mask_path,
+        width=width,
+        height=height,
+        regions=regions,
+        padding=padding,
+        dilate=dilate,
+        threshold=threshold,
+        weights_name=weights_name,
+    )
+    generate_temporal_mask(
+        input_video,
+        width,
+        height,
+        duration,
+        regions or [],
+        temporal_mask_path,
+        work_dir=work_dir,
+        padding=padding,
+        dilate=dilate,
+        samples=samples,
+        min_hits=min_hits,
+        register_process=register_process,
+    )
+
+    with Image.open(hf_mask_path) as hf_mask_image, Image.open(temporal_mask_path) as temporal_mask_image:
+        combined = ImageChops.lighter(
+            hf_mask_image.convert("L"),
+            temporal_mask_image.convert("L"),
+        )
+        combined = combined.filter(ImageFilter.MaxFilter(3))
+        combined = combined.point(lambda p: 255 if p >= 18 else 0)
+        combined.save(out_path)
+    return out_path
