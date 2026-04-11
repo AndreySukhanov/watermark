@@ -37,6 +37,7 @@ from services.propainter_runner import (
     ensure_propainter_available,
     plan_propainter_crop_groups,
     run_propainter_pipeline,
+    tighten_regions_to_mask,
     tighten_propainter_regions,
 )
 from services.watermark_segmenter import (
@@ -414,6 +415,7 @@ def _build_quality_analysis(body: dict) -> dict:
         crop_groups = []
         crop_preview_url = None
         if config.family == "propainter" and config.propainter_use_crops:
+            crop_regions = tighten_regions_to_mask(mask_path, merged_regions, width, height)
             crop_groups = [
                 {
                     "index": item["index"],
@@ -423,7 +425,7 @@ def _build_quality_analysis(body: dict) -> dict:
                     "h": item["h"],
                     "region_count": item["region_count"],
                 }
-                for item in plan_propainter_crop_groups(width, height, merged_regions, config)
+                for item in plan_propainter_crop_groups(width, height, crop_regions, config)
             ]
             if crop_groups:
                 build_propainter_crop_preview(
