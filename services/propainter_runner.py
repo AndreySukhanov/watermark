@@ -413,16 +413,22 @@ def tighten_regions_to_mask(
         bbox_h = max(1, int(cy1 - cy0 + 1))
         coverage = float(points.shape[0]) / float(max(1, (x1 - x) * (y1 - y)))
         if coverage <= 0.02:
-            pad_x_ratio = 0.22
-            pad_y_ratio = 0.28
+            pad_x_ratio = 0.16
+            pad_y_ratio = 0.22
+            pad_x_cap = 14
+            pad_y_cap = 10
         elif coverage <= 0.05:
-            pad_x_ratio = 0.26
-            pad_y_ratio = 0.32
+            pad_x_ratio = 0.20
+            pad_y_ratio = 0.26
+            pad_x_cap = 18
+            pad_y_cap = 12
         else:
-            pad_x_ratio = 0.30
-            pad_y_ratio = 0.38
-        pad_x = max(4, int(round(bbox_w * pad_x_ratio)))
-        pad_y = max(3, int(round(bbox_h * pad_y_ratio)))
+            pad_x_ratio = 0.24
+            pad_y_ratio = 0.32
+            pad_x_cap = 24
+            pad_y_cap = 16
+        pad_x = min(pad_x_cap, max(4, int(round(bbox_w * pad_x_ratio))))
+        pad_y = min(pad_y_cap, max(3, int(round(bbox_h * pad_y_ratio))))
 
         tx0 = max(0, x + max(0, cx0 - pad_x))
         ty0 = max(0, y + max(0, cy0 - pad_y))
