@@ -211,12 +211,17 @@ def _build_region_support_mask(
     draw.rectangle((x0, y0, x1, y1), fill=255)
 
     focused_band = ImageChops.multiply(_build_text_band_mask(crop_width, crop_height), support)
-    if _mask_ratio(focused_band) >= 0.002:
+    focused_band_ratio = _mask_ratio(focused_band)
+    if 0.002 <= focused_band_ratio <= 0.18:
         return focused_band.point(lambda p: 255 if p >= 18 else 0)
 
     focused_core = ImageChops.multiply(_build_text_core_mask(crop_width, crop_height), support)
-    if _mask_ratio(focused_core) >= 0.002:
+    focused_core_ratio = _mask_ratio(focused_core)
+    if focused_core_ratio >= 0.002:
         return focused_core.point(lambda p: 255 if p >= 18 else 0)
+
+    if focused_band_ratio >= 0.002:
+        return focused_band.point(lambda p: 255 if p >= 18 else 0)
 
     stripe_height = max(12, int(round((y1 - y0) * 0.44)))
     stripe_y0 = max(0, int(round((y0 + y1 - stripe_height) / 2.0)))
