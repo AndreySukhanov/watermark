@@ -15,10 +15,19 @@ CLIP_SERVER_VIDEO = os.environ.get("CLIP_SERVER_VIDEO", "").strip()
 CLIP_OFFSET = float(os.environ.get("BENCH_OFFSET", "0"))
 CLIP_DURATION = float(os.environ.get("BENCH_DURATION", "15"))
 ENGINES = [item.strip() for item in os.environ.get("BENCH_ENGINES", "lama_fast,propainter_quality").split(",") if item.strip()]
-ENGINE_OPTIONS = json.loads(os.environ.get("ENGINE_OPTIONS_JSON", "{}") or "{}")
+ENGINE_OPTIONS_FILE = os.environ.get("ENGINE_OPTIONS_FILE")
 REGIONS_PATH = Path(os.environ.get("REGIONS_FILE", str(Path(__file__).resolve().parents[1] / "assets" / "arab_watermark_regions.json")))
 OUTPUT_ROOT = Path(os.environ.get("BENCH_OUTPUT_DIR", str(Path(__file__).resolve().parents[1] / "output" / "quality_benchmark")))
 OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+
+
+def load_engine_options() -> dict:
+    if ENGINE_OPTIONS_FILE:
+        return json.loads(Path(ENGINE_OPTIONS_FILE).read_text(encoding="utf-8"))
+    return json.loads(os.environ.get("ENGINE_OPTIONS_JSON", "{}") or "{}")
+
+
+ENGINE_OPTIONS = load_engine_options()
 
 
 def log(line: str):
@@ -149,8 +158,10 @@ def load_regions() -> list[dict]:
 def get_engine_options(engine: str) -> dict:
     if not isinstance(ENGINE_OPTIONS, dict):
         return {}
-    options = ENGINE_OPTIONS.get(engine, {})
-    return options if isinstance(options, dict) else {}
+    if any(isinstance(value, dict) for value in ENGINE_OPTIONS.values()):
+        options = ENGINE_OPTIONS.get(engine, {})
+        return options if isinstance(options, dict) else {}
+    return ENGINE_OPTIONS
 
 
 def fetch_quality_analysis(info: dict, engine: str, regions: list[dict], out_dir: Path) -> dict:
