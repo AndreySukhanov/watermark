@@ -1,0 +1,11 @@
+{
+  "mask_shape": "temporal_hf_segmenter",
+  "segmenter_weights": "segmenter_universal.pth",
+  "segmenter_threshold": 0.25,
+  "temporal_mask_samples": 6,
+  "temporal_mask_min_hits": 2,
+  "propainter_crop_padding": 10,
+  "propainter_crop_merge_gap": 4,
+  "propainter_crop_max_width": 720,
+  "propainter_crop_max_height": 320
+}

@@ -16,6 +16,7 @@ OUTPUT_ROOT = Path(
         str(BASE / "test001" / "local_quality_probe_sweep"),
     )
 )
+ENGINE_OPTIONS_FILE = os.environ.get("ENGINE_OPTIONS_FILE")
 ENGINE_OPTIONS_JSON = os.environ.get("ENGINE_OPTIONS_JSON", "{}")
 CLIP_DURATION = os.environ.get("CLIP_DURATION", "5")
 OFFSETS = [
@@ -25,13 +26,19 @@ OFFSETS = [
 ]
 
 
+def load_engine_options_json() -> str:
+    if ENGINE_OPTIONS_FILE:
+        return Path(ENGINE_OPTIONS_FILE).read_text(encoding="utf-8")
+    return ENGINE_OPTIONS_JSON
+
+
 def run_probe(offset: float, output_dir: Path) -> dict:
     env = os.environ.copy()
     env["ENGINE"] = ENGINE
     env["CLIP_DURATION"] = CLIP_DURATION
     env["CLIP_OFFSET"] = str(offset)
     env["OUTPUT_DIR"] = str(output_dir)
-    env["ENGINE_OPTIONS_JSON"] = ENGINE_OPTIONS_JSON
+    env["ENGINE_OPTIONS_JSON"] = load_engine_options_json()
 
     cmd = [str(PYTHON_EXE), str(BASE / "scripts" / "local_quality_probe.py")]
     proc = subprocess.run(cmd, cwd=BASE, env=env, text=True, capture_output=True, check=True)

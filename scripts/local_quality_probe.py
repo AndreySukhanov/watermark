@@ -42,7 +42,16 @@ REGIONS_FILE = Path(
     os.environ.get("REGIONS_FILE", str(BASE / "assets" / "arab_watermark_regions.json"))
 )
 ENGINE = os.environ.get("ENGINE", DEFAULT_AI_ENGINE)
-ENGINE_OPTIONS = json.loads(os.environ.get("ENGINE_OPTIONS_JSON", "{}") or "{}")
+ENGINE_OPTIONS_FILE = os.environ.get("ENGINE_OPTIONS_FILE")
+
+
+def load_engine_options() -> dict:
+    if ENGINE_OPTIONS_FILE:
+        return json.loads(Path(ENGINE_OPTIONS_FILE).read_text(encoding="utf-8"))
+    return json.loads(os.environ.get("ENGINE_OPTIONS_JSON", "{}") or "{}")
+
+
+ENGINE_OPTIONS = load_engine_options()
 OUTPUT_ROOT = Path(
     os.environ.get("OUTPUT_DIR", str(BASE / "test001" / "local_quality_probe"))
 )
