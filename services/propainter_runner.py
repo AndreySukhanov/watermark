@@ -247,6 +247,7 @@ def summarize_propainter_crop_groups(
 
     with Image.open(mask_path) as mask_image:
         mask = np.asarray(mask_image.convert("L"), dtype=np.uint8)
+    frame_height, frame_width = mask.shape
 
     for group in crop_groups:
         x0 = int(group["x"])
@@ -287,7 +288,17 @@ def summarize_propainter_crop_groups(
         margin_ratio = round(min_margin / float(short_side), 3)
         risky_threshold = max(4, int(round(short_side * 0.06)))
         tight_threshold = max(risky_threshold + 3, int(round(short_side * 0.12)))
-        if min_margin <= risky_threshold:
+        edge_pairs = [
+            (left, x0 <= 0),
+            (top, y0 <= 0),
+            (right, x1 >= frame_width),
+            (bottom, y1 >= frame_height),
+        ]
+        edge_limited = any(margin == min_margin and touches_edge for margin, touches_edge in edge_pairs)
+        free_margins = [margin for margin, touches_edge in edge_pairs if not touches_edge]
+        if edge_limited and free_margins and min(free_margins) > tight_threshold:
+            status = "safe"
+        elif min_margin <= risky_threshold:
             status = "risky"
         elif min_margin <= tight_threshold:
             status = "tight"
@@ -314,6 +325,58 @@ def summarize_propainter_crop_groups(
             }
         )
     return summaries
+
+
+def relax_propainter_crop_groups(
+    width: int,
+    height: int,
+    crop_groups: list[dict],
+    summaries: list[dict],
+) -> list[dict]:
+    if not crop_groups or not summaries:
+        return crop_groups
+
+    summary_by_index = {int(item["index"]): item for item in summaries}
+    relaxed: list[dict] = []
+    for group in crop_groups:
+        summary = summary_by_index.get(int(group["index"]))
+        if not summary or summary.get("status") == "safe":
+            relaxed.append(dict(group))
+            continue
+
+        group_copy = dict(group)
+        group_width = max(1, int(group_copy["w"]))
+        group_height = max(1, int(group_copy["h"]))
+        short_side = max(1, min(group_width, group_height))
+        status = summary.get("status")
+        if status == "empty":
+            target_margin = max(12, int(round(short_side * 0.18)))
+        elif status == "risky":
+            target_margin = max(10, int(round(short_side * 0.16)))
+        else:
+            target_margin = max(8, int(round(short_side * 0.12)))
+
+        expand_left = max(0, target_margin - int(summary.get("margin_left_px", 0)))
+        expand_top = max(0, target_margin - int(summary.get("margin_top_px", 0)))
+        expand_right = max(0, target_margin - int(summary.get("margin_right_px", 0)))
+        expand_bottom = max(0, target_margin - int(summary.get("margin_bottom_px", 0)))
+
+        x0 = max(0, int(group_copy["x"]) - expand_left)
+        y0 = max(0, int(group_copy["y"]) - expand_top)
+        x1 = min(width, int(group_copy["x"]) + group_width + expand_right)
+        y1 = min(height, int(group_copy["y"]) + group_height + expand_bottom)
+        if x1 <= x0 or y1 <= y0:
+            relaxed.append(group_copy)
+            continue
+
+        group_copy["x"] = x0
+        group_copy["y"] = y0
+        group_copy["w"] = x1 - x0
+        group_copy["h"] = y1 - y0
+        if "box" in group_copy:
+            group_copy["box"] = (x0, y0, x1, y1)
+        relaxed.append(group_copy)
+    return relaxed
 
 
 def build_propainter_group_debug_image(
@@ -531,7 +594,14 @@ def tighten_regions_to_mask(
             tightened.append(dict(region))
             continue
 
-        crop = mask[y:y1, x:x1]
+        search_pad_x = min(24, max(6, int(round(w * 0.10))))
+        search_pad_y = min(18, max(6, int(round(h * 0.18))))
+        sx0 = max(0, x - search_pad_x)
+        sy0 = max(0, y - search_pad_y)
+        sx1 = min(width, x1 + search_pad_x)
+        sy1 = min(height, y1 + search_pad_y)
+
+        crop = mask[sy0:sy1, sx0:sx1]
         points = np.argwhere(crop > 0)
         if not points.size:
             tightened.append({"x": x, "y": y, "w": x1 - x, "h": y1 - y})
@@ -541,7 +611,7 @@ def tighten_regions_to_mask(
         cy1, cx1 = points.max(axis=0)
         bbox_w = max(1, int(cx1 - cx0 + 1))
         bbox_h = max(1, int(cy1 - cy0 + 1))
-        coverage = float(points.shape[0]) / float(max(1, (x1 - x) * (y1 - y)))
+        coverage = float(points.shape[0]) / float(max(1, (sx1 - sx0) * (sy1 - sy0)))
         if coverage <= 0.02:
             pad_x_ratio = 0.16
             pad_y_ratio = 0.22
@@ -560,10 +630,10 @@ def tighten_regions_to_mask(
         pad_x = min(pad_x_cap, max(4, int(round(bbox_w * pad_x_ratio))))
         pad_y = min(pad_y_cap, max(3, int(round(bbox_h * pad_y_ratio))))
 
-        tx0 = max(0, x + max(0, cx0 - pad_x))
-        ty0 = max(0, y + max(0, cy0 - pad_y))
-        tx1 = min(width, x + min(x1 - x, cx1 + 1 + pad_x))
-        ty1 = min(height, y + min(y1 - y, cy1 + 1 + pad_y))
+        tx0 = max(0, sx0 + max(0, cx0 - pad_x))
+        ty0 = max(0, sy0 + max(0, cy0 - pad_y))
+        tx1 = min(width, sx0 + min(sx1 - sx0, cx1 + 1 + pad_x))
+        ty1 = min(height, sy0 + min(sy1 - sy0, cy1 + 1 + pad_y))
         tightened.append(
             {
                 "x": tx0,
@@ -1069,6 +1139,13 @@ def _run_propainter_crop_pipeline(
     )
     planning_regions = tighten_regions_to_mask(planning_mask_path, effective_regions, info.width, info.height)
     crop_groups = plan_propainter_crop_groups(info.width, info.height, planning_regions, engine_config)
+    if crop_groups:
+        crop_groups = relax_propainter_crop_groups(
+            info.width,
+            info.height,
+            crop_groups,
+            summarize_propainter_crop_groups(planning_mask_path, crop_groups),
+        )
     if not crop_groups:
         raise RuntimeError("Не удалось построить crop-группы для ProPainter")
     emit_log(f"ProPainter crop groups: {len(crop_groups)}")
