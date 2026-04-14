@@ -5,6 +5,7 @@ import subprocess
 import sys
 import time
 import uuid
+import hashlib
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parents[1]
@@ -19,8 +20,10 @@ from services.iopaint_runner import (
     get_mask_stats,
 )
 from services.propainter_runner import (
+    build_propainter_group_debug_image,
     build_propainter_crop_preview,
     plan_propainter_crop_groups,
+    summarize_propainter_crop_groups,
     tighten_regions_to_mask,
     tighten_propainter_regions,
 )
@@ -46,6 +49,7 @@ CLIP_DURATION = float(os.environ.get("CLIP_DURATION", "5"))
 CLIP_OFFSET = float(os.environ.get("CLIP_OFFSET", "0"))
 AUTODETECT = os.environ.get("AUTODETECT", "0").lower() not in {"0", "false", "no"}
 ALLOW_SEGMENTER_FALLBACK = os.environ.get("ALLOW_SEGMENTER_FALLBACK", "1").lower() not in {"0", "false", "no"}
+CLIP_CACHE_ROOT = BASE / "test001" / "_clip_cache"
 
 
 def log(line: str):
@@ -56,13 +60,23 @@ def run(command: list[str]):
     subprocess.run(command, check=True)
 
 
+def run_maybe(command: list[str]) -> bool:
+    try:
+        subprocess.run(command, check=True)
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
 def create_clip(source_video: Path, output_root: Path) -> Path:
-    clip_path = output_root / f"probe_{int(CLIP_DURATION)}s.mp4"
+    clip_key = hashlib.md5(str(source_video.resolve()).encode("utf-8"), usedforsecurity=False).hexdigest()[:10]
+    clip_name = f"probe_v2_{clip_key}_o{int(CLIP_OFFSET * 1000):06d}_d{int(CLIP_DURATION * 1000):06d}.mp4"
+    clip_path = CLIP_CACHE_ROOT / clip_name
     if clip_path.exists():
         return clip_path
-    output_root.mkdir(parents=True, exist_ok=True)
+    CLIP_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
     log(f"[clip] {source_video.name} -> {clip_path.name}")
-    run(
+    if run_maybe(
         [
             "ffmpeg",
             "-y",
@@ -75,13 +89,33 @@ def create_clip(source_video: Path, output_root: Path) -> Path:
             "-c:v",
             "libx264",
             "-preset",
-            "veryfast",
+            "ultrafast",
             "-crf",
             "18",
+            "-threads",
+            "1",
             "-c:a",
             "aac",
             "-b:a",
-            "192k",
+            "128k",
+            str(clip_path),
+        ]
+    ):
+        return clip_path
+    run(
+        [
+            "ffmpeg",
+            "-y",
+            "-ss",
+            str(CLIP_OFFSET),
+            "-i",
+            str(source_video),
+            "-t",
+            str(CLIP_DURATION),
+            "-c",
+            "copy",
+            "-avoid_negative_ts",
+            "1",
             str(clip_path),
         ]
     )
@@ -255,6 +289,7 @@ def build_quality_analysis(
         )
 
         crop_groups = []
+        crop_status_counts = {}
         if config.family == "propainter" and config.propainter_use_crops:
             crop_regions = tighten_regions_to_mask(mask_path, merged_regions, info.width, info.height)
             crop_groups = [
@@ -269,6 +304,26 @@ def build_quality_analysis(
                 for item in plan_propainter_crop_groups(info.width, info.height, crop_regions, config)
             ]
             if crop_groups:
+                group_summaries = {
+                    item["index"]: item for item in summarize_propainter_crop_groups(mask_path, crop_groups)
+                }
+                group_debug_dir = run_dir / "crop_group_debug"
+                for group in crop_groups:
+                    summary = group_summaries.get(group["index"], {})
+                    group.update(summary)
+                    debug_path = group_debug_dir / f"group_{int(group['index']):02d}_overlay.png"
+                    build_propainter_group_debug_image(
+                        reference_path,
+                        mask_path,
+                        group,
+                        debug_path,
+                        summary=summary,
+                    )
+                    group["debug_path"] = str(debug_path)
+                crop_status_counts = {
+                    status: sum(1 for item in crop_groups if item.get("status") == status)
+                    for status in ("safe", "tight", "risky", "empty")
+                }
                 build_propainter_crop_preview(
                     reference_path,
                     crop_preview_path,
@@ -297,6 +352,7 @@ def build_quality_analysis(
             "suggested_regions": suggested_regions,
             "merged_regions": merged_regions,
             "crop_groups": crop_groups,
+            "crop_status_counts": crop_status_counts,
             "crop_area_total": crop_area_total,
             "crop_area_pct": crop_area_pct,
             "mask_coverage": stats["coverage"],
@@ -342,6 +398,8 @@ def main():
             "mask_coverage": analysis["mask_coverage"],
             "crop_groups": len(analysis["crop_groups"] or []),
             "crop_area_pct": analysis["crop_area_pct"],
+            "risky_groups": (analysis.get("crop_status_counts") or {}).get("risky", 0),
+            "empty_groups": (analysis.get("crop_status_counts") or {}).get("empty", 0),
         },
         ensure_ascii=False,
     ))
