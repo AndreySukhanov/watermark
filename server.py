@@ -33,10 +33,12 @@ from services.iopaint_runner import (
     build_mask_preview, get_mask_stats, generate_temporal_mask,
 )
 from services.propainter_runner import (
+    build_propainter_group_debug_image,
     build_propainter_crop_preview,
     ensure_propainter_available,
     plan_propainter_crop_groups,
     run_propainter_pipeline,
+    summarize_propainter_crop_groups,
     tighten_regions_to_mask,
     tighten_propainter_regions,
 )
@@ -165,6 +167,7 @@ def _cleanup_stale_temp():
                 or path.match("reference_*.jpg")
                 or path.match("mask_preview_*.png")
                 or path.match("crop_preview_*.png")
+                or path.match("crop_group_*.png")
             )
             is_uploaded_source = re.fullmatch(r"[0-9a-fA-F-]{36}", path.stem) is not None
             if is_known_output or is_uploaded_source:
@@ -420,6 +423,7 @@ def _build_quality_analysis(body: dict) -> dict:
             )
         crop_groups = []
         crop_preview_url = None
+        crop_status_counts = {}
         if config.family == "propainter" and config.propainter_use_crops:
             crop_regions = tighten_regions_to_mask(mask_path, merged_regions, width, height)
             crop_groups = [
@@ -434,6 +438,25 @@ def _build_quality_analysis(body: dict) -> dict:
                 for item in plan_propainter_crop_groups(width, height, crop_regions, config)
             ]
             if crop_groups:
+                group_summaries = {
+                    item["index"]: item for item in summarize_propainter_crop_groups(mask_path, crop_groups)
+                }
+                for group in crop_groups:
+                    summary = group_summaries.get(group["index"], {})
+                    group.update(summary)
+                    debug_path = TEMP / f"crop_group_{analysis_id}_{int(group['index']):02d}.png"
+                    build_propainter_group_debug_image(
+                        reference_path,
+                        mask_path,
+                        group,
+                        debug_path,
+                        summary=summary,
+                    )
+                    group["debug_url"] = f"/api/file/{debug_path.name}"
+                crop_status_counts = {
+                    status: sum(1 for item in crop_groups if item.get("status") == status)
+                    for status in ("safe", "tight", "risky", "empty")
+                }
                 build_propainter_crop_preview(
                     reference_path,
                     crop_preview_path,
@@ -457,6 +480,7 @@ def _build_quality_analysis(body: dict) -> dict:
             "merged_regions": merged_regions,
             "crop_groups": crop_groups,
             "crop_preview_url": crop_preview_url,
+            "crop_status_counts": crop_status_counts,
             "crop_area_total": crop_area_total,
             "crop_area_pct": crop_area_pct,
             "mask_coverage": stats["coverage"],

@@ -553,20 +553,31 @@ function renderQualityAnalysis() {
   const maskShape = formatMaskShapeLabel(data.engine?.mask_shape || 'auto');
   const cropGroups = Array.isArray(data.crop_groups) ? data.crop_groups : [];
   const cropAreaPct = typeof data.crop_area_pct === 'number' ? data.crop_area_pct.toFixed(3) : '0.000';
+  const cropStatusCounts = data.crop_status_counts || {};
   const maxCropArea = cropGroups.reduce((best, item) => Math.max(best, (item.w || 0) * (item.h || 0)), 0);
   const largestCrop = cropGroups.find(item => ((item.w || 0) * (item.h || 0)) === maxCropArea);
   meta.textContent =
     `Engine: ${data.engine?.label || state.engine} · reference ${data.reference_time}s · ` +
     `регионов ${data.merged_region_count} · автонайдено ${data.suggested_region_count} · ` +
     `mask ${coverage}% · ${maskShape} · bbox ${bbox.w || 0}×${bbox.h || 0}` +
-    (cropGroups.length ? ` · crop groups ${cropGroups.length} · sum ${cropAreaPct}% · max ${largestCrop?.w || 0}×${largestCrop?.h || 0}` : '');
+    (cropGroups.length
+      ? ` · crop groups ${cropGroups.length} · sum ${cropAreaPct}% · max ${largestCrop?.w || 0}×${largestCrop?.h || 0}` +
+        ` · risky ${cropStatusCounts.risky || 0} · tight ${cropStatusCounts.tight || 0} · empty ${cropStatusCounts.empty || 0}`
+      : '');
   ref.src = data.reference_url + `?_=${Date.now()}`;
   mask.src = data.mask_preview_url + `?_=${Date.now()}`;
   if (data.crop_preview_url && cropGroups.length) {
     crops.src = data.crop_preview_url + `?_=${Date.now()}`;
     cropsWrap.style.display = '';
     cropList.innerHTML = cropGroups
-      .map(group => `<span class="quality-crop-chip">#${group.index} · ${group.region_count} reg · ${group.w}×${group.h}</span>`)
+      .map(group => {
+        const margin = typeof group.min_margin_px === 'number' ? `${group.min_margin_px}px` : 'n/a';
+        const label = `#${group.index} · ${group.region_count} reg · ${group.w}×${group.h} · ${group.status || 'safe'} · min ${margin}`;
+        if (group.debug_url) {
+          return `<a class="quality-crop-chip" href="${group.debug_url}" target="_blank" rel="noopener">${label}</a>`;
+        }
+        return `<span class="quality-crop-chip">${label}</span>`;
+      })
       .join('');
     cropList.style.display = '';
   } else {
@@ -630,7 +641,9 @@ async function analyzeQuality(autodetect = false) {
       const cropPart = typeof data.crop_area_pct === 'number' && data.crop_groups?.length
         ? ` · crops ${data.crop_area_pct.toFixed(3)}%`
         : '';
-      appendLog(`+ Quality analyze: mask ${data.mask_coverage.toFixed(3)}%${cropPart}`);
+      const riskPart = data.crop_status_counts?.risky ? ` · risky ${data.crop_status_counts.risky}` : '';
+      const emptyPart = data.crop_status_counts?.empty ? ` · empty ${data.crop_status_counts.empty}` : '';
+      appendLog(`+ Quality analyze: mask ${data.mask_coverage.toFixed(3)}%${cropPart}${riskPart}${emptyPart}`);
     }
     renderQualityAnalysis();
   } catch (e) {

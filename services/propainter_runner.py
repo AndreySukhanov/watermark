@@ -237,6 +237,136 @@ def build_propainter_crop_preview(
     return out_path
 
 
+def summarize_propainter_crop_groups(
+    mask_path: Path,
+    crop_groups: list[dict],
+) -> list[dict]:
+    summaries: list[dict] = []
+    if not crop_groups:
+        return summaries
+
+    with Image.open(mask_path) as mask_image:
+        mask = np.asarray(mask_image.convert("L"), dtype=np.uint8)
+
+    for group in crop_groups:
+        x0 = int(group["x"])
+        y0 = int(group["y"])
+        width = max(1, int(group["w"]))
+        height = max(1, int(group["h"]))
+        x1 = x0 + width
+        y1 = y0 + height
+        crop = mask[y0:y1, x0:x1]
+        points = np.argwhere(crop > 0)
+        coverage_pct = round(float(points.shape[0]) / float(max(1, width * height)) * 100.0, 3)
+
+        if not points.size:
+            summaries.append(
+                {
+                    "index": int(group["index"]),
+                    "status": "empty",
+                    "mask_coverage_pct": coverage_pct,
+                    "min_margin_px": 0,
+                    "margin_left_px": 0,
+                    "margin_top_px": 0,
+                    "margin_right_px": 0,
+                    "margin_bottom_px": 0,
+                    "margin_ratio": 0.0,
+                    "mask_bbox_local": None,
+                }
+            )
+            continue
+
+        cy0, cx0 = points.min(axis=0)
+        cy1, cx1 = points.max(axis=0)
+        left = int(cx0)
+        top = int(cy0)
+        right = int(width - (cx1 + 1))
+        bottom = int(height - (cy1 + 1))
+        min_margin = min(left, top, right, bottom)
+        short_side = max(1, min(width, height))
+        margin_ratio = round(min_margin / float(short_side), 3)
+        risky_threshold = max(4, int(round(short_side * 0.06)))
+        tight_threshold = max(risky_threshold + 3, int(round(short_side * 0.12)))
+        if min_margin <= risky_threshold:
+            status = "risky"
+        elif min_margin <= tight_threshold:
+            status = "tight"
+        else:
+            status = "safe"
+
+        summaries.append(
+            {
+                "index": int(group["index"]),
+                "status": status,
+                "mask_coverage_pct": coverage_pct,
+                "min_margin_px": int(min_margin),
+                "margin_left_px": left,
+                "margin_top_px": top,
+                "margin_right_px": right,
+                "margin_bottom_px": bottom,
+                "margin_ratio": margin_ratio,
+                "mask_bbox_local": {
+                    "x": int(cx0),
+                    "y": int(cy0),
+                    "w": int(cx1 - cx0 + 1),
+                    "h": int(cy1 - cy0 + 1),
+                },
+            }
+        )
+    return summaries
+
+
+def build_propainter_group_debug_image(
+    reference_frame_path: Path,
+    mask_path: Path,
+    group: dict,
+    out_path: Path,
+    summary: dict | None = None,
+):
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    x0 = int(group["x"])
+    y0 = int(group["y"])
+    width = max(1, int(group["w"]))
+    height = max(1, int(group["h"]))
+    x1 = x0 + width
+    y1 = y0 + height
+
+    summary = summary or {}
+    status = summary.get("status", "safe")
+    palette = {
+        "safe": ((74, 128, 80, 110), (126, 180, 118, 235)),
+        "tight": ((224, 144, 32, 110), (236, 160, 48, 235)),
+        "risky": ((184, 48, 32, 110), (220, 96, 80, 235)),
+        "empty": ((96, 96, 96, 96), (188, 188, 188, 220)),
+    }
+    fill_rgba, stroke_rgba = palette.get(status, palette["safe"])
+
+    with Image.open(reference_frame_path) as reference_image, Image.open(mask_path) as mask_image:
+        crop = reference_image.convert("RGBA").crop((x0, y0, x1, y1))
+        mask_crop = mask_image.convert("L").crop((x0, y0, x1, y1))
+        alpha = mask_crop.point(lambda p: 165 if p > 0 else 0)
+        tint = Image.new("RGBA", crop.size, fill_rgba)
+        tint.putalpha(alpha)
+        preview = Image.alpha_composite(crop, tint)
+
+    draw = ImageDraw.Draw(preview)
+    draw.rectangle((0, 0, width - 1, height - 1), outline=stroke_rgba, width=2)
+    if isinstance(summary.get("mask_bbox_local"), dict):
+        bbox = summary["mask_bbox_local"]
+        bx0 = int(bbox["x"])
+        by0 = int(bbox["y"])
+        bx1 = bx0 + int(bbox["w"]) - 1
+        by1 = by0 + int(bbox["h"]) - 1
+        draw.rectangle((bx0, by0, bx1, by1), outline=(255, 245, 214, 230), width=2)
+
+    label = f"#{group['index']} {status} · min {summary.get('min_margin_px', 0)}px"
+    draw.rectangle((4, 4, min(width - 4, 148), min(height - 4, 22)), fill=(8, 7, 6, 188))
+    draw.text((8, 8), label, fill=stroke_rgba[:3] + (255,))
+    preview.save(out_path)
+    return out_path
+
+
 def _watermark_signal_map(patch: np.ndarray) -> np.ndarray:
     max_rgb = patch.max(axis=2)
     min_rgb = patch.min(axis=2)

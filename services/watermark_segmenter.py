@@ -92,6 +92,22 @@ def _iter_region_boxes(width: int, height: int, regions: list[dict] | None, padd
             yield (x0, y0, x1, y1)
 
 
+def _iter_region_entries(width: int, height: int, regions: list[dict] | None, padding: int):
+    if not regions:
+        yield None, (0, 0, width, height)
+        return
+    for region in regions:
+        try:
+            x0 = max(0, int(region["x"]) - padding)
+            y0 = max(0, int(region["y"]) - padding)
+            x1 = min(width, int(region["x"]) + int(region["w"]) + padding)
+            y1 = min(height, int(region["y"]) + int(region["h"]) + padding)
+        except Exception:
+            continue
+        if x1 > x0 and y1 > y0:
+            yield region, (x0, y0, x1, y1)
+
+
 def _open_reference_image(reference_frame_path, width: int, height: int) -> Image.Image:
     with Image.open(reference_frame_path) as source_image:
         image = source_image.convert("RGB")
@@ -148,6 +164,69 @@ def _build_text_band_mask(width: int, height: int) -> Image.Image:
     return band.point(lambda p: 255 if p >= 18 else 0)
 
 
+def _build_text_core_mask(width: int, height: int) -> Image.Image:
+    core = Image.new("L", (width, height), 0)
+    draw = ImageDraw.Draw(core)
+    left = max(0, int(width * 0.18))
+    right = min(width, int(width * 0.82))
+    center_y = height / 2.0
+    band_height = max(10, int(round(height * 0.18)))
+    top = max(0, int(round(center_y - band_height / 2.0)))
+    bottom = min(height, top + band_height)
+    if right > left and bottom > top:
+        draw.rectangle((left, top, right, bottom), fill=255)
+    core = core.filter(ImageFilter.GaussianBlur(0.8))
+    return core.point(lambda p: 255 if p >= 18 else 0)
+
+
+def _build_region_support_mask(
+    crop_width: int,
+    crop_height: int,
+    *,
+    region: dict | None = None,
+    box: tuple[int, int, int, int] | None = None,
+) -> Image.Image:
+    if not region or box is None:
+        return _build_text_core_mask(crop_width, crop_height)
+
+    try:
+        local_x0 = int(region["x"]) - int(box[0])
+        local_y0 = int(region["y"]) - int(box[1])
+        local_x1 = local_x0 + int(region["w"])
+        local_y1 = local_y0 + int(region["h"])
+    except Exception:
+        return _build_text_core_mask(crop_width, crop_height)
+
+    pad_x = max(4, int(round(max(1, local_x1 - local_x0) * 0.16)))
+    pad_y = max(3, int(round(max(1, local_y1 - local_y0) * 0.34)))
+    x0 = max(0, local_x0 - pad_x)
+    y0 = max(0, local_y0 - pad_y)
+    x1 = min(crop_width, local_x1 + pad_x)
+    y1 = min(crop_height, local_y1 + pad_y)
+    if x1 <= x0 or y1 <= y0:
+        return _build_text_core_mask(crop_width, crop_height)
+
+    support = Image.new("L", (crop_width, crop_height), 0)
+    draw = ImageDraw.Draw(support)
+    draw.rectangle((x0, y0, x1, y1), fill=255)
+
+    focused_band = ImageChops.multiply(_build_text_band_mask(crop_width, crop_height), support)
+    if _mask_ratio(focused_band) >= 0.002:
+        return focused_band.point(lambda p: 255 if p >= 18 else 0)
+
+    focused_core = ImageChops.multiply(_build_text_core_mask(crop_width, crop_height), support)
+    if _mask_ratio(focused_core) >= 0.002:
+        return focused_core.point(lambda p: 255 if p >= 18 else 0)
+
+    stripe_height = max(12, int(round((y1 - y0) * 0.44)))
+    stripe_y0 = max(0, int(round((y0 + y1 - stripe_height) / 2.0)))
+    stripe_y1 = min(crop_height, stripe_y0 + stripe_height)
+    stripe = Image.new("L", (crop_width, crop_height), 0)
+    stripe_draw = ImageDraw.Draw(stripe)
+    stripe_draw.rectangle((x0, stripe_y0, x1, stripe_y1), fill=255)
+    return stripe
+
+
 def _ensure_min_candidate_coverage(
     candidate: Image.Image,
     crop_width: int,
@@ -159,14 +238,28 @@ def _ensure_min_candidate_coverage(
     ratio = _mask_ratio(candidate)
     if ratio >= min_ratio:
         return candidate
-    fallback = _build_text_band_mask(crop_width, crop_height)
-    boosted = ImageChops.lighter(candidate, fallback)
-    boosted_ratio = _mask_ratio(boosted)
-    if boosted_ratio <= max_ratio:
-        return boosted
-    fallback_ratio = _mask_ratio(fallback)
-    if fallback_ratio <= max_ratio:
-        return fallback
+
+    fallback_candidates = [
+        _build_text_band_mask(crop_width, crop_height),
+        _build_text_core_mask(crop_width, crop_height),
+    ]
+    for fallback in fallback_candidates:
+        boosted = ImageChops.lighter(candidate, fallback)
+        boosted_ratio = _mask_ratio(boosted)
+        if min_ratio <= boosted_ratio <= max_ratio:
+            return boosted
+        fallback_ratio = _mask_ratio(fallback)
+        if min_ratio <= fallback_ratio <= max_ratio:
+            return fallback
+
+    for fallback in reversed(fallback_candidates):
+        boosted = ImageChops.lighter(candidate, fallback)
+        boosted_ratio = _mask_ratio(boosted)
+        if boosted_ratio > 0:
+            return boosted
+        fallback_ratio = _mask_ratio(fallback)
+        if fallback_ratio > 0:
+            return fallback
     return candidate
 
 
@@ -257,6 +350,43 @@ def _compose_temporal_hf_candidate(
     elif candidate_ratio < 0.003 and hf_ratio > temporal_ratio:
         candidate = hf_candidate
     return _ensure_min_candidate_coverage(candidate, crop_width, crop_height, min_ratio=0.010, max_ratio=0.18)
+
+
+def _build_temporal_region_fallback_candidate(
+    frame_crop: Image.Image,
+    crop_width: int,
+    crop_height: int,
+    *,
+    region: dict | None = None,
+    box: tuple[int, int, int, int] | None = None,
+) -> Image.Image:
+    from services.iopaint_runner import _refine_region_mask
+
+    glyph_candidate = _trim_candidate_to_projection(
+        _postprocess_candidate(_refine_region_mask(frame_crop), crop_width, crop_height),
+        crop_width,
+        crop_height,
+    )
+    support_candidate = _build_region_support_mask(
+        crop_width,
+        crop_height,
+        region=region,
+        box=box,
+    )
+    candidate = ImageChops.lighter(glyph_candidate, support_candidate)
+    candidate_ratio = _mask_ratio(candidate)
+    support_ratio = _mask_ratio(support_candidate)
+    if candidate_ratio <= 0:
+        candidate = support_candidate
+    elif candidate_ratio > 0.20 and 0 < support_ratio < candidate_ratio:
+        candidate = support_candidate
+    return _ensure_min_candidate_coverage(
+        candidate,
+        crop_width,
+        crop_height,
+        min_ratio=0.006,
+        max_ratio=0.16,
+    )
 
 
 def generate_hf_segmenter_mask(
@@ -410,17 +540,46 @@ def generate_temporal_hf_segmenter_mask(
     )
 
     mask = Image.new("L", (width, height), 0)
-    with Image.open(hf_mask_path) as hf_mask_image, Image.open(temporal_mask_path) as temporal_mask_image:
+    with (
+        _open_reference_image(reference_frame_path, width, height) as reference_image,
+        Image.open(hf_mask_path) as hf_mask_image,
+        Image.open(temporal_mask_path) as temporal_mask_image,
+    ):
         hf_mask = hf_mask_image.convert("L")
         temporal_mask = temporal_mask_image.convert("L")
-        for box in _iter_region_boxes(width, height, regions, padding):
+        for region, box in _iter_region_entries(width, height, regions, padding):
             x0, y0, x1, y1 = box
+            crop_width = x1 - x0
+            crop_height = y1 - y0
             candidate = _compose_temporal_hf_candidate(
                 hf_mask.crop(box),
                 temporal_mask.crop(box),
-                x1 - x0,
-                y1 - y0,
+                crop_width,
+                crop_height,
             )
+            candidate_ratio = _mask_ratio(candidate)
+            if candidate_ratio < 0.003:
+                frame_crop = reference_image.crop(box)
+                fallback_candidate = _build_temporal_region_fallback_candidate(
+                    frame_crop,
+                    crop_width,
+                    crop_height,
+                    region=region,
+                    box=box,
+                )
+                fallback_ratio = _mask_ratio(fallback_candidate)
+                if candidate_ratio <= 0:
+                    candidate = fallback_candidate
+                elif fallback_ratio > 0:
+                    candidate = ImageChops.lighter(candidate, fallback_candidate)
+                else:
+                    candidate = _ensure_min_candidate_coverage(
+                        candidate,
+                        crop_width,
+                        crop_height,
+                        min_ratio=0.006,
+                        max_ratio=0.16,
+                    )
             existing = mask.crop(box)
             mask.paste(ImageChops.lighter(existing, candidate), (x0, y0))
     mask = _dilate_mask(mask, dilate)
