@@ -147,3 +147,43 @@ curl https://<POD_ID>-8000.proxy.runpod.net/health
 - Заказчик одобрил бюджет на GPU (RunPod On-Demand)
 - Фокус: web-версия с AI качеством
 - Требование: скорость обработки не более 5x от длительности видео
+
+## Snapshot 2026-04-15
+
+Текущая стадия проекта:
+- инфраструктура web-only работает и деплоится на RunPod;
+- локальный quality planning baseline стабилизирован;
+- требование по качеству удаления watermark пока не выполнено.
+
+Что уже зафиксировано:
+- лучший текущий preset для quality planning: `assets/quality_presets/propainter_detail_temporal_hf_v20.json`
+- локальный sweep этого preset на окнах `0s / 60s / 120s / 180s` даёт:
+  - `crop_groups = 11`
+  - `risky_groups = 0`
+  - `empty_groups = 0`
+  - `crop_area_pct` в диапазоне `9.796% .. 12.304%`
+- локальный `15s` planning на том же preset:
+  - `mask_coverage = 2.76%`
+  - `crop_groups = 11`
+  - `crop_area_pct = 14.172%`
+  - `risky_groups = 0`
+  - `empty_groups = 0`
+
+Последняя серверная проверка на RunPod A5000:
+- `health` отвечает: `status=ok`, `gpu_available=true`, `gpu_name=NVIDIA RTX A5000`
+- `lama_fast` на `15s` клипе: `90s` (`~6x`)
+- `propainter_quality` на `15s` клипе c preset `propainter_detail_temporal_hf_v20.json`: `2013s` (`~134x`)
+
+Практический вывод по качеству на 15s:
+- `propainter_quality` визуально лучше `lama_fast` по сохранности лица и фона;
+- watermark остаётся хорошо читаемым в обоих режимах;
+- приемлемого quality результата на `15s` пока нет.
+
+Где лежат свежие артефакты:
+- локальный sweep: `test001/local_quality_probe_sweep_v20/20260415_004216/summary.md`
+- server compare: `test001/runpod_15s_compare_20260415/summary.md`
+
+Что делать дальше:
+- использовать preset `propainter_detail_temporal_hf_v20.json` как единый baseline для следующих GPU прогонов;
+- не тратить GPU на длинные прогоны до получения приемлемого результата на `15s`;
+- следующий R&D шаг должен быть направлен на улучшение фактического удаления watermark, а не только planning метрик.

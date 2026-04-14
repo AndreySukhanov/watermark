@@ -9,10 +9,10 @@ if (-not $repoUrl) {
 }
 
 $sshKey = Join-Path $env:USERPROFILE ".ssh\id_ed25519"
-$remoteHost = "root@213.173.98.105"
-$remotePort = 37940
-$remotePodId = "kfvfx7dvsh1nwf"
-$remoteIdleTimeoutMinutes = 10
+$remoteHost = if ($env:RUNPOD_REMOTE_HOST) { $env:RUNPOD_REMOTE_HOST.Trim() } else { "root@213.173.98.105" }
+$remotePort = if ($env:RUNPOD_REMOTE_PORT) { [int]$env:RUNPOD_REMOTE_PORT } else { 37940 }
+$remotePodId = if ($env:RUNPOD_POD_ID_OVERRIDE) { $env:RUNPOD_POD_ID_OVERRIDE.Trim() } else { "kfvfx7dvsh1nwf" }
+$remoteIdleTimeoutMinutes = if ($env:IDLE_TIMEOUT_MINUTES_OVERRIDE) { [int]$env:IDLE_TIMEOUT_MINUTES_OVERRIDE } else { 10 }
 $remoteBundle = "/tmp/watermark_deploy.bundle"
 $localBundle = Join-Path $env:TEMP ("watermark_deploy_{0}.bundle" -f ([guid]::NewGuid().ToString("N")))
 
