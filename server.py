@@ -37,6 +37,7 @@ from services.propainter_runner import (
     build_propainter_crop_preview,
     ensure_propainter_available,
     plan_propainter_crop_groups,
+    relax_propainter_crop_groups,
     run_propainter_pipeline,
     summarize_propainter_crop_groups,
     tighten_regions_to_mask,
@@ -426,6 +427,14 @@ def _build_quality_analysis(body: dict) -> dict:
         crop_status_counts = {}
         if config.family == "propainter" and config.propainter_use_crops:
             crop_regions = tighten_regions_to_mask(mask_path, merged_regions, width, height)
+            planned_groups = plan_propainter_crop_groups(width, height, crop_regions, config)
+            if planned_groups:
+                planned_groups = relax_propainter_crop_groups(
+                    width,
+                    height,
+                    planned_groups,
+                    summarize_propainter_crop_groups(mask_path, planned_groups),
+                )
             crop_groups = [
                 {
                     "index": item["index"],
@@ -435,7 +444,7 @@ def _build_quality_analysis(body: dict) -> dict:
                     "h": item["h"],
                     "region_count": item["region_count"],
                 }
-                for item in plan_propainter_crop_groups(width, height, crop_regions, config)
+                for item in planned_groups
             ]
             if crop_groups:
                 group_summaries = {
