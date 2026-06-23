@@ -1,0 +1,8 @@
+{
+  "engine": "lama_fast",
+  "mask_shape": "ocr",
+  "refine_mask": false,
+  "mask_dilate": 3,
+  "mask_padding": 2,
+  "propainter_tighten_regions": false
+}

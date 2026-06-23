@@ -48,6 +48,8 @@ from services.watermark_segmenter import (
     generate_hybrid_segmenter_mask,
     generate_temporal_hf_segmenter_mask,
 )
+from services.watermark_ocr import generate_ocr_mask
+from services.face_restore import restore_faces_in_dir
 from services.watermark_detector import dedupe_regions, detect_repeated_regions
 
 BASE = Path(__file__).parent
@@ -635,6 +637,21 @@ def _prepare_mask_assets(
         )
         emit_log(f"Mask reference frame: {reference_time:.1f}s")
 
+    if config.mask_shape == "ocr":
+        emit_log("Mask: OCR + template (glyph-tight)")
+        work_dir.mkdir(parents=True, exist_ok=True)
+        generate_ocr_mask(
+            input_path,
+            mask_path,
+            width=width,
+            height=height,
+            duration=duration,
+            work_dir=work_dir,
+            register_process=register_process,
+            emit_log=emit_log,
+        )
+        return mask_path, reference_frame_path
+
     if config.mask_shape == "hybrid_segmenter":
         generate_hybrid_segmenter_mask(
             reference_frame_path,
@@ -853,8 +870,18 @@ def _run_lama_pipeline(
         if actual_total_frames <= 0:
             raise RuntimeError("Failed to extract frames from video")
 
+        emit_log("Restoring faces (GFPGAN)...")
+        emit_progress(86)
+        _raise_if_cancelled(job_id)
+        face_started_at = time.perf_counter()
+        restore_faces_in_dir(
+            all_inpainted, all_inpainted,
+            device=device, mask_path=mask_path, emit_log=emit_log,
+        )
+        emit_log(f"  GFPGAN: {time.perf_counter() - face_started_at:.1f}s")
+
         emit_log("Reassembling video...")
-        emit_progress(92)
+        emit_progress(95)
         _raise_if_cancelled(job_id)
         reassemble_started_at = time.perf_counter()
         reassemble_video(
@@ -1058,7 +1085,11 @@ async def process_video(ws: WebSocket):
         mode = params.get("mode", "delogo")
         regions = params.get("regions", [])
 
-        if not regions:
+        engine_key = params.get("engine", "")
+        engine_opts = params.get("engine_options") or {}
+        mask_shape = engine_opts.get("mask_shape", "")
+
+        if not regions and mask_shape != "ocr":
             await ws.send_json({"type": "error", "data": "No regions specified for removal"})
             return
 
