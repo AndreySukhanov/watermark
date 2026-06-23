@@ -9,3 +9,4 @@ segmentation-models-pytorch
 huggingface_hub
 torchvision
 timm
+easyocr>=1.7.1

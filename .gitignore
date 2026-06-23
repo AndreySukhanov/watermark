@@ -1,3 +1,4 @@
+# Python
 __pycache__/
 *.py[cod]
 *.pyo
@@ -7,21 +8,44 @@ dist/
 build/
 *.spec
 *.egg-info/
+
+# Editors / IDE
 .idea/
 .vscode/
-temp_web/
 .claude/
+
+# Runtime artifacts
+temp_web/
 *.log
 output/
 test001/
+models/
+
+# OCR mask cache (per-video, regenerable)
+assets/ocr_mask_cache/
 
 # Local test media and debug artifacts
-SAMPLE.mp4
+*.mp4
+*.mov
+*.avi
+*.mkv
 watermark_update.zip
-screenshot_app.png
+screenshot_*.png
 shot_*.png
 debug_*.png
 debug_*.jpg
 original_frame.jpg
 output_frame*.jpg
 result_frame.jpg
+
+# Secrets / deploy
+.env
+.env.*
+*.pem
+*.key
+deploy_secrets.*
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
