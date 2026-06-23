@@ -7,11 +7,20 @@
 [![LaMa](https://img.shields.io/badge/inpaint-LaMa-blue)](https://github.com/advimman/lama)
 [![EasyOCR](https://img.shields.io/badge/OCR-EasyOCR-FF6F00)](https://github.com/JaidedAI/EasyOCR)
 [![License: Source-Available](https://img.shields.io/badge/license-Source--Available-orange)](LICENSE)
+[![CI](https://github.com/AndreySukhanov/ghostmark-video/actions/workflows/ci.yml/badge.svg)](https://github.com/AndreySukhanov/ghostmark-video/actions/workflows/ci.yml)
 
 **Auto-detect and erase tiled watermarks from video — with surgical precision.**
 On a 3-minute 1080p clip with 11 diagonally-tiled watermarks, removes every readable trace while leaving faces, hands, and background untouched. **5.3× realtime on RTX 4090.**
 
+---
 
+## Demo
+
+<!-- Drop a 5–15s before/after clip as assets/demo.gif (or .mp4) and uncomment:
+![before / after](assets/demo.gif)
+-->
+
+_A side-by-side demo clip will be added here. See [Benchmarks](#benchmarks) for measured numbers in the meantime._
 
 ---
 
